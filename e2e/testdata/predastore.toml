@@ -1,0 +1,22 @@
+version = "1.0"
+region = "us-east-1"
+host = "0.0.0.0"
+port = 9443
+debug = false
+disable_logging = true
+base_path = "/data"
+
+[[buckets]]
+name = "dns-zones"
+region = "us-east-1"
+type = "fs"
+pathname = "dns-zones"
+public = false
+encryption = ""
+
+[[auth]]
+access_key_id = "AKIAIOSFODNN7EXAMPLE"
+secret_access_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+policy = [
+  { bucket = "dns-zones", actions = ["s3:*"] }
+]

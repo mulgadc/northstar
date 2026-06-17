@@ -1,0 +1,65 @@
+# Domain configration file in TOML format.
+version = 1.0
+
+# Domain settings
+[domain]
+domain = "hello_a.net"
+created = 2021-05-27T07:32:00Z
+modified = 2022-05-27T07:32:00Z
+verified = true
+active = true
+ownerid = 10
+
+# Default settings if not defined in each [[records]]
+[defaults]
+ttl = 3600
+type = 1
+class = 1
+
+# Domain entry, one entry per record
+# A record for root domain, hello_a.net > 203.100.1.1
+[[records]]
+domain = ""
+address = "203.100.1.1"
+
+# A record for www.hello_a.net > 203.100.1.1
+[[records]]
+domain = "www."
+address = "203.100.1.1"
+
+# A record for host-1.hello_a.net > 203.100.1.2
+[[records]]
+domain = "host-1."
+address = "203.100.1.2"
+
+# A record for host-1.hello_a.net > 203.100.1.3
+[[records]]
+domain = "host-2."
+address = "203.100.1.3"
+
+# MX record for hello_a.net, with MX preference set. 
+[[records]]
+domain = ""
+type = 15
+preference = 10
+address = "host-1.hello_a.net."
+
+# MX record for hello_a.net, with MX preference set. 
+[[records]]
+domain = ""
+type = 15
+preference = 20
+address = "host-2.hello_a.net."
+
+# TXT record to specify SPF record
+[[records]]
+domain = ""
+type = 16
+address = "v=spf1 ip:203.100.1.2 ip:203.100.1.3 mx a -all"
+
+# Sample TXT record for google-site-verification
+[[records]]
+domain = ""
+type = 16
+address = "google-site-verification=3a13e1788d7a1c3b4602afc083e855de"
+

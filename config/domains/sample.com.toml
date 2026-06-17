@@ -1,0 +1,37 @@
+# Domain configration file in TOML format.
+version = 1.0
+
+# Domain settings
+[domain]
+domain = "sample.com"
+created = 2021-05-27T07:32:00Z
+soa = "ns1.my-dns-ns.com."
+verified = true
+active = true
+ownerid = 10
+
+# Default settings if not defined in each [[records]]
+[defaults]
+ttl = 3600
+type = 1
+class = 1
+
+# Domain entry, one entry per record
+[[records]]
+domain = ""
+type = 2
+address = "ns1.my-dns-ns.com."
+
+[[records]]
+domain = ""
+type = 2
+address = "ns2.my-dns-ns.com."
+
+[[records]]
+domain = ""
+address = "211.18.163.103"
+
+[[records]]
+domain = ""
+type = 16
+address = "pdb3bff2c0d64622a9b2250438277a591WICKEDMOOTYBOOM1"

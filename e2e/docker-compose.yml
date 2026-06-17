@@ -1,0 +1,61 @@
+services:
+  predastore:
+    build:
+      context: ../../mulga/predastore
+      dockerfile_inline: |
+        FROM golang:alpine AS build
+        RUN apk add build-base git
+        WORKDIR /src
+        COPY . .
+        RUN go build -ldflags "-s -w" -o /s3d ./cmd/s3d
+        FROM alpine:3.19
+        RUN apk add ca-certificates gcompat
+        COPY --from=build /s3d /s3d
+        COPY --from=build /src/config/server.key /config/server.key
+        COPY --from=build /src/config/server.pem /config/server.pem
+        EXPOSE 9443
+        CMD ["/s3d"]
+    environment:
+      PORT: "9443"
+      CONFIG: "/config/predastore.toml"
+    volumes:
+      - ./testdata/predastore.toml:/config/predastore.toml:ro
+      - zone-data:/data/dns-zones
+    ports:
+      - "9443:9443"
+    healthcheck:
+      test: ["CMD", "wget", "--no-check-certificate", "-q", "-O", "/dev/null", "https://localhost:9443/"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  northstar:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    environment:
+      ZONE_DIR: "s3://dns-zones"
+      AWS_ACCESS_KEY: "AKIAIOSFODNN7EXAMPLE"
+      AWS_SECRET_ACCESS_KEY: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+      AWS_REGION: "us-east-1"
+      NORTHSTAR_S3_ENDPOINT: "https://predastore:9443"
+      NORTHSTAR_S3_INSECURE: "1"
+      S3_SYNC_RETRY: "3"
+      PORT: "5553"
+      HOST: "0.0.0.0"
+      DOT_PORT: "8853"
+      NORTHSTAR_TLS_CERT: "/certs/server.pem"
+      NORTHSTAR_TLS_KEY: "/certs/server.key"
+      NORTHSTAR_LOG_IGNORE: "1"
+    volumes:
+      - ./testdata/certs:/certs:ro
+    ports:
+      - "5553:5553/udp"
+      - "5553:5553/tcp"
+      - "8853:8853/tcp"
+    depends_on:
+      predastore:
+        condition: service_healthy
+
+volumes:
+  zone-data:

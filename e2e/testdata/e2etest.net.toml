@@ -1,0 +1,104 @@
+version = 1.0
+
+[domain]
+domain = "e2etest.net"
+created = 2024-01-01T00:00:00Z
+modified = 2024-06-15T12:00:00Z
+soa = "ns1.e2etest.net."
+verified = true
+active = true
+ownerid = 1
+
+[defaults]
+ttl = 300
+type = 1
+class = 1
+
+# Root A record
+[[records]]
+domain = ""
+address = "10.20.30.1"
+
+# WWW subdomain
+[[records]]
+domain = "www."
+address = "10.20.30.2"
+
+# NS records
+[[records]]
+domain = ""
+type = 2
+address = "ns1.e2etest.net."
+
+[[records]]
+domain = ""
+type = 2
+address = "ns2.e2etest.net."
+
+# NS glue records
+[[records]]
+domain = "ns1."
+address = "10.20.30.10"
+
+[[records]]
+domain = "ns2."
+address = "10.20.30.11"
+
+# AAAA record
+[[records]]
+domain = ""
+type = 28
+address = "2001:db8::1"
+
+# MX records
+[[records]]
+domain = ""
+type = 15
+preference = 10
+address = "mail.e2etest.net."
+
+[[records]]
+domain = "mail."
+address = "10.20.30.20"
+
+# TXT records
+[[records]]
+domain = ""
+type = 16
+address = "v=spf1 mx a -all"
+
+[[records]]
+domain = ""
+type = 16
+address = "e2e-verification=test123"
+
+# SRV record for service discovery
+[[records]]
+domain = "_nats._tcp."
+type = 33
+priority = 10
+weight = 0
+port = 4222
+address = "node1.e2etest.net."
+
+[[records]]
+domain = "node1."
+address = "10.20.30.100"
+
+# CAA record
+[[records]]
+domain = ""
+type = 257
+caa_flag = 0
+caa_tag = "issue"
+address = "letsencrypt.org"
+
+# Wildcard
+[[records]]
+domain = "*."
+address = "10.20.30.99"
+
+# Specific subdomain (overrides wildcard)
+[[records]]
+domain = "api."
+address = "10.20.30.50"

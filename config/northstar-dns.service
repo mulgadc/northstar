@@ -1,0 +1,14 @@
+[Unit]
+Description=Northstar DNS service
+Wants=network.target
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Environment=PORT="53"
+ExecStart=/home/benduncan/northstar
+StandardOutput=syslog
+
+[Install]
+WantedBy=multi-user.target
