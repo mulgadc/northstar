@@ -3,6 +3,7 @@ package backend
 import (
 	"crypto/tls"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"os/signal"
@@ -11,7 +12,6 @@ import (
 
 	"github.com/miekg/dns"
 	"github.com/mulgadc/northstar/pkg/config"
-	log "github.com/sirupsen/logrus"
 )
 
 type Handler struct {
@@ -38,9 +38,9 @@ func StartDaemon(zone_dir, host, port, tlsCert, tlsKey, dotPort string) error {
 
 	// Start TCP in background
 	go func() {
-		log.Infof("Starting TCP listener on %s", addr)
+		slog.Info("starting TCP listener", "addr", addr)
 		if err := srvTCP.ListenAndServe(); err != nil {
-			log.Errorf("TCP listener failed: %v", err)
+			slog.Error("TCP listener failed", "error", err)
 		}
 	}()
 
@@ -48,7 +48,7 @@ func StartDaemon(zone_dir, host, port, tlsCert, tlsKey, dotPort string) error {
 	if tlsCert != "" && tlsKey != "" {
 		cert, err := tls.LoadX509KeyPair(tlsCert, tlsKey)
 		if err != nil {
-			log.Errorf("Failed to load TLS cert/key: %v", err)
+			slog.Error("failed to load TLS cert/key", "error", err)
 		} else {
 			if dotPort == "" {
 				dotPort = "853"
@@ -64,9 +64,9 @@ func StartDaemon(zone_dir, host, port, tlsCert, tlsKey, dotPort string) error {
 			}
 
 			go func() {
-				log.Infof("Starting DoT listener on %s", dotAddr)
+				slog.Info("starting DoT listener", "addr", dotAddr)
 				if err := srvDoT.ListenAndServe(); err != nil {
-					log.Errorf("DoT listener failed: %v", err)
+					slog.Error("DoT listener failed", "error", err)
 				}
 			}()
 		}
@@ -77,12 +77,12 @@ func StartDaemon(zone_dir, host, port, tlsCert, tlsKey, dotPort string) error {
 	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
 		<-sig
-		log.Info("Shutting down DNS servers...")
+		slog.Info("shutting down DNS servers")
 		srvUDP.Shutdown()
 		srvTCP.Shutdown()
 	}()
 
-	log.Infof("Starting UDP listener on %s", addr)
+	slog.Info("starting UDP listener", "addr", addr)
 	return srvUDP.ListenAndServe()
 }
 
@@ -99,12 +99,7 @@ func (h *Handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	qtype := r.Question[0].Qtype
 	qclass := r.Question[0].Qclass
 
-	_, logignore := os.LookupEnv("NORTHSTAR_LOG_IGNORE")
-	if logignore {
-		log.SetLevel(log.FatalLevel)
-	}
-
-	log.Printf("DNS Request: %q => %q (type %d)", domain, w.RemoteAddr(), qtype)
+	slog.Info("DNS request", "domain", domain, "client", w.RemoteAddr().String(), "type", qtype)
 
 	// Handle EDNS0
 	var clientBufSize uint16 = 512

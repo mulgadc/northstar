@@ -34,6 +34,12 @@
 - [ ] Split-horizon DNS (views)
 - [ ] Health-aware DNS
 - [ ] Response caching
+- [ ] migrate to github.com/miekg/dns/v2
+- [ ] bump deps
+- [ ] add golangci-lint + govulncheck
+- [ ] github actions workflow
+- [ ] add gitignore
+- [ ] don't hardcode version in cmd/northstar/main.go, do it how spinifex does it in Makefile
 
 ---
 

@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -19,7 +20,6 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	"github.com/fsnotify/fsnotify"
 	"github.com/pelletier/go-toml/v2"
-	log "github.com/sirupsen/logrus"
 )
 
 type Config struct {
@@ -76,17 +76,19 @@ type DomainLookup struct {
 }
 
 func init() {
-	_, logignore := os.LookupEnv("NORTHSTAR_LOG_IGNORE")
+	level := new(slog.LevelVar)
 
-	if logignore {
-		log.SetLevel(log.FatalLevel)
+	// NORTHSTAR_LOG_IGNORE silences everything below fatal; NORTHSTAR_LOG_DEBUG
+	// enables debug output. Default is info.
+	if _, ok := os.LookupEnv("NORTHSTAR_LOG_IGNORE"); ok {
+		level.Set(slog.LevelError + 4)
 	}
 
-	_, logdebug := os.LookupEnv("NORTHSTAR_LOG_DEBUG")
-
-	if logdebug {
-		log.SetLevel(log.DebugLevel)
+	if _, ok := os.LookupEnv("NORTHSTAR_LOG_DEBUG"); ok {
+		level.Set(slog.LevelDebug)
 	}
+
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
 }
 
 // newS3Session creates an AWS session with optional custom endpoint support
@@ -197,25 +199,26 @@ func (config *Config) MonitorConfig(zone_dir string) {
 			for {
 				time.Sleep(time.Second * time.Duration(s3retrysecs))
 
-				log.Info("MonitorConfig: S3 check sync state")
+				slog.Info("MonitorConfig: S3 check sync state")
 
 				path := strings.Split(zone_dir, "s3://")
 
 				if len(path) == 0 {
-					log.Fatal("S3_BUCKET field required")
+					slog.Error("S3_BUCKET field required")
+					os.Exit(1)
 				}
 
 				resp, err := svc.ListObjectsV2(&s3.ListObjectsV2Input{Bucket: aws.String(path[1])})
 
 				if err != nil {
-					log.Warnf("Unable to list items in bucket %q, %v", path, err)
+					slog.Warn("unable to list items in bucket", "path", path, "error", err)
 					continue
 				}
 
 				configsync := make(map[string]bool, 10)
 
 				for _, item := range resp.Contents {
-					log.Debugf("MonitorConfig: Scanning %s", *item.Key)
+					slog.Debug("MonitorConfig: scanning", "key", *item.Key)
 
 					if strings.HasSuffix(*item.Key, ".toml") {
 						domain := strings.Replace(*item.Key, ".toml", "", 1)
@@ -229,7 +232,7 @@ func (config *Config) MonitorConfig(zone_dir string) {
 							myconfig, err := ReadZone(fmt.Sprintf("%s/%s", zone_dir, *item.Key), *item.LastModified)
 
 							if err != nil {
-								log.Warn(err)
+								slog.Warn(err.Error())
 								continue
 							}
 
@@ -238,7 +241,7 @@ func (config *Config) MonitorConfig(zone_dir string) {
 							if err == nil {
 								config.AddZone(myconfig)
 							} else {
-								log.Errorf("Domain %s and config file (%s) mismatch, entry skipped. %s", domain, *item.Key, err)
+								slog.Error("domain and config file mismatch, entry skipped", "domain", domain, "key", *item.Key, "error", err)
 							}
 						}
 
@@ -247,12 +250,12 @@ func (config *Config) MonitorConfig(zone_dir string) {
 						config.Mu.RUnlock()
 
 						if exists && *item.LastModified != domainEntry.Modified {
-							log.Infof("MonitorConfig: New config file detected (%s), reloading", *item.Key)
+							slog.Info("MonitorConfig: new config file detected, reloading", "key", *item.Key)
 
 							myconfig, err := ReadZone(fmt.Sprintf("%s/%s", zone_dir, *item.Key), *item.LastModified)
 
 							if err != nil {
-								log.Warn(err)
+								slog.Warn(err.Error())
 								continue
 							}
 
@@ -262,7 +265,7 @@ func (config *Config) MonitorConfig(zone_dir string) {
 								config.DeleteZone(domainEntry.Domain)
 								config.AddZone(myconfig)
 							} else {
-								log.Errorf("Domain %s and config file (%s) mismatch, entry skipped. %s", domain, *item.Key, err)
+								slog.Error("domain and config file mismatch, entry skipped", "domain", domain, "key", *item.Key, "error", err)
 							}
 						}
 					}
@@ -279,7 +282,7 @@ func (config *Config) MonitorConfig(zone_dir string) {
 				config.Mu.RUnlock()
 
 				for _, domain := range toDelete {
-					log.Debugf("MonitorConfig: Delete Check (%s)", domain)
+					slog.Debug("MonitorConfig: delete check", "domain", domain)
 					config.DeleteZone(domain)
 				}
 			}
@@ -288,7 +291,8 @@ func (config *Config) MonitorConfig(zone_dir string) {
 	} else {
 		watcher, err := fsnotify.NewWatcher()
 		if err != nil {
-			log.Fatal(err)
+			slog.Error(err.Error())
+			os.Exit(1)
 		}
 		defer watcher.Close()
 
@@ -300,14 +304,14 @@ func (config *Config) MonitorConfig(zone_dir string) {
 					if !ok {
 						return
 					}
-					log.Println("event:", event)
+					slog.Info("fsnotify event", "event", event)
 
 					if event.Op&fsnotify.Write == fsnotify.Write {
-						log.Println("modified file:", event.Name)
+						slog.Info("modified file", "name", event.Name)
 
 						myconfig, err := ReadZone(event.Name, time.Now())
 						if err != nil {
-							log.Warn(err)
+							slog.Warn(err.Error())
 							continue
 						}
 
@@ -316,16 +320,16 @@ func (config *Config) MonitorConfig(zone_dir string) {
 							config.DeleteZone(myconfig.Domain.Domain)
 							config.AddZone(myconfig)
 						} else {
-							log.Error(err)
+							slog.Error(err.Error())
 						}
 					}
 
 					if event.Op&fsnotify.Create == fsnotify.Create {
-						log.Println("new file:", event.Name)
+						slog.Info("new file", "name", event.Name)
 
 						myconfig, err := ReadZone(event.Name, time.Now())
 						if err != nil {
-							log.Warn(err)
+							slog.Warn(err.Error())
 							continue
 						}
 
@@ -334,12 +338,12 @@ func (config *Config) MonitorConfig(zone_dir string) {
 							config.DeleteZone(myconfig.Domain.Domain)
 							config.AddZone(myconfig)
 						} else {
-							log.Error(err)
+							slog.Error(err.Error())
 						}
 					}
 
 					if event.Op&fsnotify.Remove == fsnotify.Remove {
-						log.Println("remove file:", event.Name)
+						slog.Info("remove file", "name", event.Name)
 
 						domain := filepath.Base(event.Name)
 						domain = strings.Replace(domain, ".toml", "", 1)
@@ -351,14 +355,15 @@ func (config *Config) MonitorConfig(zone_dir string) {
 					if !ok {
 						return
 					}
-					log.Println("error:", err)
+					slog.Info("watcher error", "error", err)
 				}
 			}
 		}()
 
 		err = watcher.Add(zone_dir)
 		if err != nil {
-			log.Fatal(err)
+			slog.Error(err.Error())
+			os.Exit(1)
 		}
 
 		<-done
@@ -417,13 +422,13 @@ func ApplyDefaults(config *ConfigArr, lastModified time.Time) {
 		rsize := len(config.Records[i].Address)
 		if rsize > 255 {
 			config.Records[i].Address = config.Records[i].Address[:255]
-			log.Warn(config.Records[i].Domain, " => Record size too large, 255 byte limit, truncated.")
+			slog.Warn("record size too large, 255 byte limit, truncated", "domain", config.Records[i].Domain)
 		}
 	}
 }
 
 func ReadZoneFiles(zone_dir string) (t Config) {
-	log.Infof("ReadZoneFiles: Reading %s", zone_dir)
+	slog.Info("ReadZoneFiles: reading", "dir", zone_dir)
 
 	t.Domain = make(map[string]Domain, 4)
 	t.Records = make(map[DomainLookup][]Records, 4)
@@ -437,12 +442,13 @@ func ReadZoneFiles(zone_dir string) (t Config) {
 		path := strings.Split(zone_dir, "s3://")
 
 		if len(path) == 0 {
-			log.Fatal("S3_BUCKET field required")
+			slog.Error("S3_BUCKET field required")
+			os.Exit(1)
 		}
 
 		resp, err := svc.ListObjectsV2(&s3.ListObjectsV2Input{Bucket: aws.String(path[1])})
 		if err != nil {
-			log.Errorf("Unable to list items in bucket %q, %v", path, err)
+			slog.Error("unable to list items in bucket", "path", path, "error", err)
 			return
 		}
 
@@ -456,10 +462,10 @@ func ReadZoneFiles(zone_dir string) (t Config) {
 					if err == nil {
 						t.AddZone(myconfig)
 					} else {
-						log.Errorf("Unable to load item %q, %v", item, err)
+						slog.Error("unable to load item", "item", item, "error", err)
 					}
 				} else {
-					log.Errorf("Unable to download item %q, %v", item, err)
+					slog.Error("unable to download item", "item", item, "error", err)
 				}
 			}
 		}
@@ -467,7 +473,7 @@ func ReadZoneFiles(zone_dir string) (t Config) {
 		files, err := os.ReadDir(zone_dir)
 
 		if err != nil {
-			log.Errorf("failed reading directory: %s", err)
+			slog.Error("failed reading directory", "error", err)
 		}
 
 		for _, file := range files {
@@ -475,7 +481,7 @@ func ReadZoneFiles(zone_dir string) (t Config) {
 
 			info, err := file.Info()
 			if err != nil {
-				log.Warnf("failed to get file info: %s", err)
+				slog.Warn("failed to get file info", "error", err)
 				continue
 			}
 
@@ -487,7 +493,7 @@ func ReadZoneFiles(zone_dir string) (t Config) {
 	}
 
 	elapsed := time.Since(start)
-	log.Infof("Config files read in (%s)", elapsed)
+	slog.Info("config files read", "elapsed", elapsed)
 
 	return t
 }
@@ -504,7 +510,7 @@ func (t *Config) AddZone(myconfig ConfigArr) {
 
 	t.Domain[myconfig.Domain.Domain] = myconfig.Domain
 
-	log.Infof("Added (%s) to local DNS zone DB", myconfig.Domain.Domain)
+	slog.Info("added zone to local DNS DB", "domain", myconfig.Domain.Domain)
 }
 
 func (t *Config) DeleteZone(domain string) {
@@ -522,11 +528,11 @@ func (t *Config) DeleteZone(domain string) {
 
 	delete(t.Domain, domain)
 
-	log.Infof("DeleteZone: Removed (%s) from local DNS zone DB", domain)
+	slog.Info("DeleteZone: removed zone from local DNS DB", "domain", domain)
 }
 
 func ReadZone(zone_file string, lastModified time.Time) (myconfig ConfigArr, err error) {
-	log.Infof("ReadZone: Parsing Zone file (%s) (%s)", zone_file, lastModified)
+	slog.Info("ReadZone: parsing zone file", "file", zone_file, "modified", lastModified)
 
 	if strings.HasPrefix(zone_file, "s3://") {
 		s3path := strings.SplitN(zone_file, "s3://", -1)
@@ -558,7 +564,7 @@ func ReadZone(zone_file string, lastModified time.Time) (myconfig ConfigArr, err
 
 		if err != nil {
 			errorMsg := fmt.Sprintf("Error reading %s %s", zone_file, err)
-			log.Warn(errorMsg)
+			slog.Warn(errorMsg)
 			return myconfig, errors.New(errorMsg)
 		}
 

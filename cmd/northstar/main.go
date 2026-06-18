@@ -1,9 +1,9 @@
 package main
 
 import (
+	"fmt"
+	"log/slog"
 	"os"
-
-	log "github.com/sirupsen/logrus"
 
 	"github.com/mulgadc/northstar/pkg/backend"
 )
@@ -30,7 +30,7 @@ func main() {
 	var tlsKey = os.Getenv("NORTHSTAR_TLS_KEY")
 	var dotPort = os.Getenv("DOT_PORT")
 
-	log.Printf(`
+	fmt.Printf(`
 
 
 	┌─┐┌─┐┬  ┬┌─┐┌─┐┌─┐
@@ -45,6 +45,7 @@ func main() {
 	err := backend.StartDaemon(zone_dir, host, port, tlsCert, tlsKey, dotPort)
 
 	if err != nil {
-		log.Fatalf("Failed to start DNS server: %s\n", err.Error())
+		slog.Error("failed to start DNS server", "error", err)
+		os.Exit(1)
 	}
 }

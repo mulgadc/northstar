@@ -7,7 +7,6 @@ require (
 	github.com/fsnotify/fsnotify v1.6.0
 	github.com/miekg/dns v1.1.72
 	github.com/pelletier/go-toml/v2 v2.0.7
-	github.com/sirupsen/logrus v1.9.3
 	github.com/stretchr/testify v1.8.1
 )
 

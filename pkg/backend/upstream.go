@@ -3,12 +3,12 @@ package backend
 import (
 	"crypto/tls"
 	"errors"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/miekg/dns"
-	log "github.com/sirupsen/logrus"
 )
 
 // Upstream handles DNS resolution against configurable upstream servers
@@ -84,7 +84,7 @@ func (u *Upstream) Resolve(name string, qtype uint16) ([]dns.RR, error) {
 
 		in, _, err := client.Exchange(m, server.Address)
 		if err != nil {
-			log.Debugf("Upstream %s failed: %v", server.Address, err)
+			slog.Debug("upstream failed", "server", server.Address, "error", err)
 			lastErr = err
 			continue
 		}
