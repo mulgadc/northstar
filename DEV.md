@@ -35,8 +35,6 @@
 - [ ] Health-aware DNS
 - [ ] Response caching
 - [ ] migrate to github.com/miekg/dns/v2
-- [ ] bump deps
-- [ ] dependabot
 - [ ] make e2e part of main module, match spinifex
 
 ---
