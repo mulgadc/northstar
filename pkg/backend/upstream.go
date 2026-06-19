@@ -4,7 +4,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"log/slog"
-	"os"
 	"strings"
 	"time"
 
@@ -22,38 +21,29 @@ type UpstreamServer struct {
 	UseTLS  bool
 }
 
-// NewUpstream creates an upstream resolver from the NORTHSTAR_UPSTREAM env var.
-// Format: "tls://1.1.1.1:853,tls://8.8.8.8:853,1.1.1.1:53"
-// Falls back to Cloudflare and Google DoT if not configured.
-func NewUpstream() *Upstream {
-	upstream := &Upstream{}
+// NewUpstream creates an upstream resolver from an explicit server list. An
+// empty list means no forwarding (non-authoritative queries are refused).
+func NewUpstream(servers []UpstreamServer) *Upstream {
+	return &Upstream{Servers: servers}
+}
 
-	envUpstream := os.Getenv("NORTHSTAR_UPSTREAM")
-	if envUpstream != "" {
-		for server := range strings.SplitSeq(envUpstream, ",") {
-			server = strings.TrimSpace(server)
-			if after, ok := strings.CutPrefix(server, "tls://"); ok {
-				upstream.Servers = append(upstream.Servers, UpstreamServer{
-					Address: after,
-					UseTLS:  true,
-				})
-			} else {
-				upstream.Servers = append(upstream.Servers, UpstreamServer{
-					Address: server,
-					UseTLS:  false,
-				})
-			}
+// ParseUpstreamServers parses a nameserver list into UpstreamServers. Each entry
+// is "host:port" (plaintext) or "tls://host:port" (DoT), e.g.
+// "tls://1.1.1.1:853,8.8.8.8:53".
+func ParseUpstreamServers(nameservers []string) []UpstreamServer {
+	var servers []UpstreamServer
+	for _, server := range nameservers {
+		server = strings.TrimSpace(server)
+		if server == "" {
+			continue
 		}
-	} else {
-		// Defaults: TLS first, plaintext fallback
-		upstream.Servers = []UpstreamServer{
-			{Address: "1.1.1.1:853", UseTLS: true},
-			{Address: "8.8.8.8:853", UseTLS: true},
-			{Address: "1.1.1.1:53", UseTLS: false},
+		if after, ok := strings.CutPrefix(server, "tls://"); ok {
+			servers = append(servers, UpstreamServer{Address: after, UseTLS: true})
+		} else {
+			servers = append(servers, UpstreamServer{Address: server, UseTLS: false})
 		}
 	}
-
-	return upstream
+	return servers
 }
 
 // Resolve performs a DNS lookup against upstream servers with failover.

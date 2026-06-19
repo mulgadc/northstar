@@ -1,11 +1,17 @@
 package main
 
 import (
+	"context"
+	"flag"
 	"fmt"
 	"log/slog"
 	"os"
+	"os/signal"
+	"strings"
+	"syscall"
 
-	"github.com/mulgadc/northstar/pkg/backend"
+	"github.com/mulgadc/northstar/pkg/config"
+	"github.com/mulgadc/northstar/pkg/server"
 )
 
 // Version is set via ldflags at build time.
@@ -13,24 +19,10 @@ import (
 var Version = "dev"
 
 func main() {
-	var zone_dir = os.Getenv("ZONE_DIR")
-	if zone_dir == "" {
-		zone_dir = "config/domains/"
-	}
+	configPath := flag.String("config", "", "path to northstar.toml")
+	flag.Parse()
 
-	var host = os.Getenv("HOST")
-	if host == "" {
-		host = "0.0.0.0"
-	}
-
-	var port = os.Getenv("PORT")
-	if port == "" {
-		port = "53"
-	}
-
-	var tlsCert = os.Getenv("NORTHSTAR_TLS_CERT")
-	var tlsKey = os.Getenv("NORTHSTAR_TLS_KEY")
-	var dotPort = os.Getenv("DOT_PORT")
+	setupLogging()
 
 	fmt.Printf(`
 
@@ -44,10 +36,107 @@ func main() {
 
 	`, Version)
 
-	err := backend.StartDaemon(zone_dir, host, port, tlsCert, tlsKey, dotPort)
-
+	cfg, err := loadConfig(*configPath)
 	if err != nil {
+		slog.Error("failed to load config", "error", err)
+		os.Exit(1)
+	}
+
+	srv, err := server.NewServer(cfg)
+	if err != nil {
+		slog.Error("failed to create server", "error", err)
+		os.Exit(1)
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	if err := srv.Start(ctx); err != nil {
 		slog.Error("failed to start DNS server", "error", err)
 		os.Exit(1)
 	}
+
+	<-ctx.Done()
+	slog.Info("shutting down")
+	if err := srv.Shutdown(context.Background()); err != nil {
+		slog.Error("shutdown error", "error", err)
+	}
+}
+
+// loadConfig reads northstar.toml when --config is given, otherwise builds a
+// config from environment variables for backward-compatible standalone use.
+func loadConfig(path string) (config.ServerConfig, error) {
+	if path != "" {
+		return config.LoadServerConfig(path)
+	}
+
+	zoneDir := envOr("ZONE_DIR", "config/domains/")
+	host := envOr("HOST", "0.0.0.0")
+	port := envOr("PORT", "53")
+
+	cfg := config.ServerConfig{
+		Listen:        fmt.Sprintf("%s:%s", host, port),
+		DotListen:     dotListen(host),
+		TLSCert:       os.Getenv("NORTHSTAR_TLS_CERT"),
+		TLSKey:        os.Getenv("NORTHSTAR_TLS_KEY"),
+		DefaultDomain: os.Getenv("NORTHSTAR_DEFAULT_DOMAIN"),
+		ZoneDir:       zoneDir,
+		Upstream: config.UpstreamConfig{
+			Nameservers: splitCSV(os.Getenv("NORTHSTAR_UPSTREAM")),
+		},
+	}
+
+	if endpoint := os.Getenv("NORTHSTAR_S3_ENDPOINT"); endpoint != "" {
+		bucket := strings.TrimPrefix(zoneDir, "s3://")
+		cfg.ZoneDir = ""
+		cfg.S3 = config.S3Config{
+			Endpoint:  endpoint,
+			Region:    os.Getenv("AWS_REGION"),
+			Bucket:    bucket,
+			AccessKey: os.Getenv("AWS_ACCESS_KEY"),
+			SecretKey: os.Getenv("AWS_SECRET_ACCESS_KEY"),
+			Insecure:  os.Getenv("NORTHSTAR_S3_INSECURE") != "",
+		}
+	}
+
+	return cfg, nil
+}
+
+func setupLogging() {
+	level := new(slog.LevelVar)
+	if _, ok := os.LookupEnv("NORTHSTAR_LOG_IGNORE"); ok {
+		level.Set(slog.LevelError + 4)
+	}
+	if _, ok := os.LookupEnv("NORTHSTAR_LOG_DEBUG"); ok {
+		level.Set(slog.LevelDebug)
+	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
+}
+
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
+func dotListen(host string) string {
+	if os.Getenv("NORTHSTAR_TLS_CERT") == "" {
+		return ""
+	}
+	port := envOr("DOT_PORT", "853")
+	return fmt.Sprintf("%s:%s", host, port)
+}
+
+func splitCSV(s string) []string {
+	if s == "" {
+		return nil
+	}
+	var out []string
+	for p := range strings.SplitSeq(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

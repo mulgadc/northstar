@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -8,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -75,54 +75,46 @@ type DomainLookup struct {
 	Class  uint16
 }
 
-func init() {
-	level := new(slog.LevelVar)
-
-	// NORTHSTAR_LOG_IGNORE silences everything below fatal; NORTHSTAR_LOG_DEBUG
-	// enables debug output. Default is info.
-	if _, ok := os.LookupEnv("NORTHSTAR_LOG_IGNORE"); ok {
-		level.Set(slog.LevelError + 4)
-	}
-
-	if _, ok := os.LookupEnv("NORTHSTAR_LOG_DEBUG"); ok {
-		level.Set(slog.LevelDebug)
-	}
-
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
+// S3Config carries explicit credentials and endpoint for an S3-compatible zone
+// backend (e.g. predastore). A nil S3Config means filesystem-only operation.
+// This replaces the former environment-driven global session so the library can
+// be embedded without reading process env or holding package-level state.
+type S3Config struct {
+	Endpoint  string `toml:"endpoint"`
+	Region    string `toml:"region"`
+	Bucket    string `toml:"bucket"`
+	AccessKey string `toml:"access_key"`
+	SecretKey string `toml:"secret_key"`
+	Insecure  bool   `toml:"insecure"`
 }
 
-// newS3Session creates an AWS session with optional custom endpoint support
-// for S3-compatible backends like Predastore.
-func newS3Session() *session.Session {
-	cfg := aws.Config{}
+// newS3Session builds an AWS session from explicit S3Config — no global state,
+// no environment lookups.
+func newS3Session(cfg *S3Config) *session.Session {
+	awsCfg := aws.Config{}
 
-	if region := os.Getenv("AWS_REGION"); region != "" {
-		cfg.Region = aws.String(region)
+	if cfg.Region != "" {
+		awsCfg.Region = aws.String(cfg.Region)
 	}
 
-	// Support custom S3-compatible endpoints (e.g., Predastore)
-	if endpoint := os.Getenv("NORTHSTAR_S3_ENDPOINT"); endpoint != "" {
-		cfg.Endpoint = aws.String(endpoint)
-		cfg.S3ForcePathStyle = aws.Bool(true)
+	if cfg.Endpoint != "" {
+		awsCfg.Endpoint = aws.String(cfg.Endpoint)
+		awsCfg.S3ForcePathStyle = aws.Bool(true)
 	}
 
-	// Support explicit credentials via env vars
-	accessKey := os.Getenv("AWS_ACCESS_KEY")
-	secretKey := os.Getenv("AWS_SECRET_ACCESS_KEY")
-	if accessKey != "" && secretKey != "" {
-		cfg.Credentials = credentials.NewStaticCredentials(accessKey, secretKey, "")
+	if cfg.AccessKey != "" && cfg.SecretKey != "" {
+		awsCfg.Credentials = credentials.NewStaticCredentials(cfg.AccessKey, cfg.SecretKey, "")
 	}
 
-	// Skip TLS verification for self-signed certs (e.g., local Predastore)
-	if os.Getenv("NORTHSTAR_S3_INSECURE") != "" {
-		cfg.HTTPClient = &http.Client{
+	if cfg.Insecure {
+		awsCfg.HTTPClient = &http.Client{
 			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // G402: opt-in via NORTHSTAR_S3_INSECURE for self-signed S3 endpoints
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // G402: opt-in via S3Config.Insecure for self-signed S3 endpoints
 			},
 		}
 	}
 
-	return session.Must(session.NewSession(&cfg))
+	return session.Must(session.NewSession(&awsCfg))
 }
 
 // FindZone walks up the domain labels to find which zone we are authoritative for.
@@ -183,191 +175,179 @@ func GenerateTestDomains(num int) *Config {
 	return t
 }
 
-func (config *Config) MonitorConfig(zone_dir string) {
-	var s3retry = os.Getenv("S3_SYNC_RETRY")
-
-	if s3retry == "" {
-		s3retry = "60"
+// MonitorConfig watches the zone source for changes and reloads zones live. For
+// an s3:// zone_dir it polls every syncInterval (requires a non-nil s3cfg); for
+// a filesystem path it uses fsnotify. It returns when ctx is cancelled, and logs
+// and returns on fatal errors rather than exiting the process, so it is safe to
+// run as an embedded goroutine.
+func (config *Config) MonitorConfig(ctx context.Context, zone_dir string, s3cfg *S3Config, syncInterval time.Duration) {
+	if syncInterval <= 0 {
+		syncInterval = 30 * time.Second
 	}
 
-	s3retrysecs, _ := strconv.Atoi(s3retry)
-
 	if strings.HasPrefix(zone_dir, "s3://") {
-		go func() {
-			sess := newS3Session()
-			svc := s3.New(sess)
+		if s3cfg == nil {
+			slog.Error("MonitorConfig: s3:// zone_dir requires S3 config", "zone_dir", zone_dir)
+			return
+		}
 
-			for {
-				time.Sleep(time.Second * time.Duration(s3retrysecs))
+		sess := newS3Session(s3cfg)
+		svc := s3.New(sess)
 
-				slog.Info("MonitorConfig: S3 check sync state")
+		ticker := time.NewTicker(syncInterval)
+		defer ticker.Stop()
 
-				path := strings.Split(zone_dir, "s3://")
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
 
-				if len(path) == 0 {
-					slog.Error("S3_BUCKET field required")
-					os.Exit(1)
-				}
+			slog.Debug("MonitorConfig: S3 check sync state")
 
-				resp, err := svc.ListObjectsV2(&s3.ListObjectsV2Input{Bucket: aws.String(path[1])})
+			path := strings.Split(zone_dir, "s3://")
 
-				if err != nil {
-					slog.Warn("unable to list items in bucket", "path", path, "error", err)
+			if len(path) < 2 {
+				slog.Error("MonitorConfig: invalid s3:// zone_dir", "zone_dir", zone_dir)
+				return
+			}
+
+			resp, err := svc.ListObjectsV2(&s3.ListObjectsV2Input{Bucket: aws.String(path[1])})
+
+			if err != nil {
+				slog.Warn("MonitorConfig: unable to list bucket", "bucket", path[1], "error", err)
+				continue
+			}
+
+			configsync := make(map[string]bool, 10)
+
+			for _, item := range resp.Contents {
+				slog.Debug("MonitorConfig: scanning", "key", *item.Key)
+
+				if !strings.HasSuffix(*item.Key, ".toml") {
 					continue
 				}
 
-				configsync := make(map[string]bool, 10)
+				domain := strings.Replace(*item.Key, ".toml", "", 1)
+				configsync[domain] = true
 
-				for _, item := range resp.Contents {
-					slog.Debug("MonitorConfig: scanning", "key", *item.Key)
-
-					if strings.HasSuffix(*item.Key, ".toml") {
-						domain := strings.Replace(*item.Key, ".toml", "", 1)
-						configsync[domain] = true
-
-						config.Mu.RLock()
-						_, ok := config.Domain[domain]
-						config.Mu.RUnlock()
-
-						if !ok {
-							myconfig, err := ReadZone(fmt.Sprintf("%s/%s", zone_dir, *item.Key), *item.LastModified)
-
-							if err != nil {
-								slog.Warn(err.Error())
-								continue
-							}
-
-							err = checkConfigDomainMatch(*item.Key, myconfig.Domain.Domain)
-
-							if err == nil {
-								config.AddZone(myconfig)
-							} else {
-								slog.Error("domain and config file mismatch, entry skipped", "domain", domain, "key", *item.Key, "error", err)
-							}
-						}
-
-						config.Mu.RLock()
-						domainEntry, exists := config.Domain[domain]
-						config.Mu.RUnlock()
-
-						if exists && *item.LastModified != domainEntry.Modified {
-							slog.Info("MonitorConfig: new config file detected, reloading", "key", *item.Key)
-
-							myconfig, err := ReadZone(fmt.Sprintf("%s/%s", zone_dir, *item.Key), *item.LastModified)
-
-							if err != nil {
-								slog.Warn(err.Error())
-								continue
-							}
-
-							err = checkConfigDomainMatch(*item.Key, myconfig.Domain.Domain)
-
-							if err == nil {
-								config.DeleteZone(domainEntry.Domain)
-								config.AddZone(myconfig)
-							} else {
-								slog.Error("domain and config file mismatch, entry skipped", "domain", domain, "key", *item.Key, "error", err)
-							}
-						}
-					}
-				}
-
-				// Purge domains no longer on S3
 				config.Mu.RLock()
-				var toDelete []string
-				for domain := range config.Domain {
-					if _, ok := configsync[domain]; !ok {
-						toDelete = append(toDelete, domain)
-					}
-				}
+				_, ok := config.Domain[domain]
 				config.Mu.RUnlock()
 
-				for _, domain := range toDelete {
-					slog.Debug("MonitorConfig: delete check", "domain", domain)
+				if !ok {
+					myconfig, err := ReadZone(fmt.Sprintf("%s/%s", zone_dir, *item.Key), *item.LastModified, s3cfg)
+
+					if err != nil {
+						slog.Warn("MonitorConfig: read zone failed", "key", *item.Key, "error", err)
+						continue
+					}
+
+					if err := checkConfigDomainMatch(*item.Key, myconfig.Domain.Domain); err == nil {
+						config.AddZone(myconfig)
+					} else {
+						slog.Error("MonitorConfig: domain and config file mismatch, entry skipped", "domain", domain, "key", *item.Key, "error", err)
+					}
+				}
+
+				config.Mu.RLock()
+				domainEntry, exists := config.Domain[domain]
+				config.Mu.RUnlock()
+
+				if exists && *item.LastModified != domainEntry.Modified {
+					slog.Info("MonitorConfig: new config file detected, reloading", "key", *item.Key)
+
+					myconfig, err := ReadZone(fmt.Sprintf("%s/%s", zone_dir, *item.Key), *item.LastModified, s3cfg)
+
+					if err != nil {
+						slog.Warn("MonitorConfig: read zone failed", "key", *item.Key, "error", err)
+						continue
+					}
+
+					if err := checkConfigDomainMatch(*item.Key, myconfig.Domain.Domain); err == nil {
+						config.DeleteZone(domainEntry.Domain)
+						config.AddZone(myconfig)
+					} else {
+						slog.Error("MonitorConfig: domain and config file mismatch, entry skipped", "domain", domain, "key", *item.Key, "error", err)
+					}
+				}
+			}
+
+			// Purge domains no longer on S3
+			config.Mu.RLock()
+			var toDelete []string
+			for domain := range config.Domain {
+				if _, ok := configsync[domain]; !ok {
+					toDelete = append(toDelete, domain)
+				}
+			}
+			config.Mu.RUnlock()
+
+			for _, domain := range toDelete {
+				slog.Debug("MonitorConfig: delete check", "domain", domain)
+				config.DeleteZone(domain)
+			}
+		}
+	}
+
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		slog.Error("MonitorConfig: failed to create watcher", "error", err)
+		return
+	}
+	defer watcher.Close()
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case event, ok := <-watcher.Events:
+				if !ok {
+					return
+				}
+				slog.Debug("MonitorConfig: fsnotify event", "event", event)
+
+				if event.Op&fsnotify.Write == fsnotify.Write || event.Op&fsnotify.Create == fsnotify.Create {
+					slog.Info("MonitorConfig: zone file changed", "name", event.Name)
+
+					myconfig, err := ReadZone(event.Name, time.Now(), nil)
+					if err != nil {
+						slog.Warn("MonitorConfig: read zone failed", "name", event.Name, "error", err)
+						continue
+					}
+
+					if err := checkConfigDomainMatch(event.Name, myconfig.Domain.Domain); err == nil {
+						config.DeleteZone(myconfig.Domain.Domain)
+						config.AddZone(myconfig)
+					} else {
+						slog.Error("MonitorConfig: domain and config file mismatch", "name", event.Name, "error", err)
+					}
+				}
+
+				if event.Op&fsnotify.Remove == fsnotify.Remove {
+					slog.Info("MonitorConfig: zone file removed", "name", event.Name)
+
+					domain := strings.Replace(filepath.Base(event.Name), ".toml", "", 1)
 					config.DeleteZone(domain)
 				}
-			}
-		}()
-	} else {
-		watcher, err := fsnotify.NewWatcher()
-		if err != nil {
-			slog.Error(err.Error())
-			os.Exit(1)
-		}
-		defer watcher.Close()
 
-		done := make(chan bool)
-		go func() {
-			for {
-				select {
-				case event, ok := <-watcher.Events:
-					if !ok {
-						return
-					}
-					slog.Info("fsnotify event", "event", event)
-
-					if event.Op&fsnotify.Write == fsnotify.Write {
-						slog.Info("modified file", "name", event.Name)
-
-						myconfig, err := ReadZone(event.Name, time.Now())
-						if err != nil {
-							slog.Warn(err.Error())
-							continue
-						}
-
-						err = checkConfigDomainMatch(event.Name, myconfig.Domain.Domain)
-						if err == nil {
-							config.DeleteZone(myconfig.Domain.Domain)
-							config.AddZone(myconfig)
-						} else {
-							slog.Error(err.Error())
-						}
-					}
-
-					if event.Op&fsnotify.Create == fsnotify.Create {
-						slog.Info("new file", "name", event.Name)
-
-						myconfig, err := ReadZone(event.Name, time.Now())
-						if err != nil {
-							slog.Warn(err.Error())
-							continue
-						}
-
-						err = checkConfigDomainMatch(event.Name, myconfig.Domain.Domain)
-						if err == nil {
-							config.DeleteZone(myconfig.Domain.Domain)
-							config.AddZone(myconfig)
-						} else {
-							slog.Error(err.Error())
-						}
-					}
-
-					if event.Op&fsnotify.Remove == fsnotify.Remove {
-						slog.Info("remove file", "name", event.Name)
-
-						domain := filepath.Base(event.Name)
-						domain = strings.Replace(domain, ".toml", "", 1)
-
-						config.DeleteZone(domain)
-					}
-
-				case err, ok := <-watcher.Errors:
-					if !ok {
-						return
-					}
-					slog.Info("watcher error", "error", err)
+			case err, ok := <-watcher.Errors:
+				if !ok {
+					return
 				}
+				slog.Warn("MonitorConfig: watcher error", "error", err)
 			}
-		}()
-
-		err = watcher.Add(zone_dir)
-		if err != nil {
-			slog.Error(err.Error())
-			os.Exit(1)
 		}
+	}()
 
-		<-done
+	if err := watcher.Add(zone_dir); err != nil {
+		slog.Error("MonitorConfig: failed to watch zone dir", "zone_dir", zone_dir, "error", err)
+		return
 	}
+
+	<-ctx.Done()
 }
 
 func ApplyDefaults(config *ConfigArr, lastModified time.Time) {
@@ -427,7 +407,9 @@ func ApplyDefaults(config *ConfigArr, lastModified time.Time) {
 	}
 }
 
-func ReadZoneFiles(zone_dir string) *Config {
+// ReadZoneFiles loads all zone files from zone_dir. For an s3:// zone_dir, s3cfg
+// must be non-nil; otherwise it reads from the local filesystem.
+func ReadZoneFiles(zone_dir string, s3cfg *S3Config) *Config {
 	slog.Info("ReadZoneFiles: reading", "dir", zone_dir)
 
 	t := &Config{}
@@ -437,25 +419,30 @@ func ReadZoneFiles(zone_dir string) *Config {
 	start := time.Now()
 
 	if strings.HasPrefix(zone_dir, "s3://") {
-		sess := newS3Session()
+		if s3cfg == nil {
+			slog.Error("ReadZoneFiles: s3:// zone_dir requires S3 config", "zone_dir", zone_dir)
+			return t
+		}
+
+		sess := newS3Session(s3cfg)
 		svc := s3.New(sess)
 
 		path := strings.Split(zone_dir, "s3://")
 
-		if len(path) == 0 {
-			slog.Error("S3_BUCKET field required")
-			os.Exit(1)
+		if len(path) < 2 {
+			slog.Error("ReadZoneFiles: invalid s3:// zone_dir", "zone_dir", zone_dir)
+			return t
 		}
 
 		resp, err := svc.ListObjectsV2(&s3.ListObjectsV2Input{Bucket: aws.String(path[1])})
 		if err != nil {
-			slog.Error("unable to list items in bucket", "path", path, "error", err)
+			slog.Error("unable to list items in bucket", "bucket", path[1], "error", err)
 			return t
 		}
 
 		for _, item := range resp.Contents {
 			if strings.HasSuffix(*item.Key, ".toml") {
-				myconfig, err := ReadZone(fmt.Sprintf("%s/%s", zone_dir, *item.Key), *item.LastModified)
+				myconfig, err := ReadZone(fmt.Sprintf("%s/%s", zone_dir, *item.Key), *item.LastModified, s3cfg)
 
 				if err == nil {
 					err = checkConfigDomainMatch(*item.Key, myconfig.Domain.Domain)
@@ -463,10 +450,10 @@ func ReadZoneFiles(zone_dir string) *Config {
 					if err == nil {
 						t.AddZone(myconfig)
 					} else {
-						slog.Error("unable to load item", "item", item, "error", err)
+						slog.Error("unable to load item", "key", *item.Key, "error", err)
 					}
 				} else {
-					slog.Error("unable to download item", "item", item, "error", err)
+					slog.Error("unable to download item", "key", *item.Key, "error", err)
 				}
 			}
 		}
@@ -486,7 +473,7 @@ func ReadZoneFiles(zone_dir string) *Config {
 				continue
 			}
 
-			myconfig, err := ReadZone(filename, info.ModTime())
+			myconfig, err := ReadZone(filename, info.ModTime(), nil)
 			if err == nil {
 				t.AddZone(myconfig)
 			}
@@ -532,10 +519,16 @@ func (t *Config) DeleteZone(domain string) {
 	slog.Info("DeleteZone: removed zone from local DNS DB", "domain", domain)
 }
 
-func ReadZone(zone_file string, lastModified time.Time) (myconfig ConfigArr, err error) {
+// ReadZone parses a single zone file from the filesystem or S3. For an s3://
+// zone_file, s3cfg must be non-nil.
+func ReadZone(zone_file string, lastModified time.Time, s3cfg *S3Config) (myconfig ConfigArr, err error) {
 	slog.Info("ReadZone: parsing zone file", "file", zone_file, "modified", lastModified)
 
 	if strings.HasPrefix(zone_file, "s3://") {
+		if s3cfg == nil {
+			return myconfig, errors.New("s3:// zone_file requires S3 config")
+		}
+
 		s3path := strings.Split(zone_file, "s3://")
 		paths := strings.SplitN(s3path[1], "/", 2)
 
@@ -543,32 +536,34 @@ func ReadZone(zone_file string, lastModified time.Time) (myconfig ConfigArr, err
 			return myconfig, errors.New("path not found in S3")
 		}
 
-		sess := newS3Session()
+		sess := newS3Session(s3cfg)
 
 		buff := &aws.WriteAtBuffer{}
 		downloader := s3manager.NewDownloader(sess)
 
-		numBytes, _ := downloader.Download(buff,
+		numBytes, err := downloader.Download(buff,
 			&s3.GetObjectInput{
 				Bucket: aws.String(paths[0]),
 				Key:    aws.String(paths[1]),
 			})
 
-		if numBytes > 0 {
-			if err := toml.Unmarshal(buff.Bytes(), &myconfig); err != nil {
-				return myconfig, err
-			}
-			ApplyDefaults(&myconfig, lastModified)
-		} else {
+		if err != nil {
+			return myconfig, fmt.Errorf("download %s: %w", zone_file, err)
+		}
+
+		if numBytes == 0 {
 			return myconfig, errors.New("config file empty")
 		}
+
+		if err := toml.Unmarshal(buff.Bytes(), &myconfig); err != nil {
+			return myconfig, err
+		}
+		ApplyDefaults(&myconfig, lastModified)
 	} else {
 		file, err := os.ReadFile(zone_file)
 
 		if err != nil {
-			errorMsg := fmt.Sprintf("error reading %s %s", zone_file, err)
-			slog.Warn(errorMsg)
-			return myconfig, errors.New(errorMsg)
+			return myconfig, fmt.Errorf("error reading %s: %w", zone_file, err)
 		}
 
 		if err := toml.Unmarshal(file, &myconfig); err != nil {
@@ -577,7 +572,7 @@ func ReadZone(zone_file string, lastModified time.Time) (myconfig ConfigArr, err
 		ApplyDefaults(&myconfig, lastModified)
 	}
 
-	return myconfig, err
+	return myconfig, nil
 }
 
 func checkConfigDomainMatch(filename string, domain string) (err error) {

@@ -1,14 +1,10 @@
 package backend
 
 import (
-	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"net"
-	"os"
-	"os/signal"
 	"strings"
-	"syscall"
 
 	"github.com/miekg/dns"
 	"github.com/mulgadc/northstar/pkg/config"
@@ -17,77 +13,6 @@ import (
 type Handler struct {
 	Conf     *config.Config
 	Upstream *Upstream
-}
-
-func StartDaemon(zone_dir, host, port, tlsCert, tlsKey, dotPort string) error {
-	cfg := config.ReadZoneFiles(zone_dir)
-	go cfg.MonitorConfig(zone_dir)
-
-	handler := &Handler{
-		Conf:     cfg,
-		Upstream: NewUpstream(),
-	}
-
-	addr := fmt.Sprintf("%s:%s", host, port)
-
-	// UDP listener
-	srvUDP := &dns.Server{Addr: addr, Net: "udp", Handler: handler}
-
-	// TCP listener
-	srvTCP := &dns.Server{Addr: addr, Net: "tcp", Handler: handler}
-
-	// Start TCP in background
-	go func() {
-		slog.Info("starting TCP listener", "addr", addr)
-		if err := srvTCP.ListenAndServe(); err != nil {
-			slog.Error("TCP listener failed", "error", err)
-		}
-	}()
-
-	// Optional DNS-over-TLS (DoT) listener
-	if tlsCert != "" && tlsKey != "" {
-		cert, err := tls.LoadX509KeyPair(tlsCert, tlsKey)
-		if err != nil {
-			slog.Error("failed to load TLS cert/key", "error", err)
-		} else {
-			if dotPort == "" {
-				dotPort = "853"
-			}
-			dotAddr := fmt.Sprintf("%s:%s", host, dotPort)
-			tlsConfig := &tls.Config{Certificates: []tls.Certificate{cert}}
-
-			srvDoT := &dns.Server{
-				Addr:      dotAddr,
-				Net:       "tcp-tls",
-				TLSConfig: tlsConfig,
-				Handler:   handler,
-			}
-
-			go func() {
-				slog.Info("starting DoT listener", "addr", dotAddr)
-				if err := srvDoT.ListenAndServe(); err != nil {
-					slog.Error("DoT listener failed", "error", err)
-				}
-			}()
-		}
-	}
-
-	// Graceful shutdown on SIGTERM/SIGINT
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
-	go func() {
-		<-sig
-		slog.Info("shutting down DNS servers")
-		if err := srvUDP.Shutdown(); err != nil {
-			slog.Error("UDP server shutdown failed", "error", err)
-		}
-		if err := srvTCP.Shutdown(); err != nil {
-			slog.Error("TCP server shutdown failed", "error", err)
-		}
-	}()
-
-	slog.Info("starting UDP listener", "addr", addr)
-	return srvUDP.ListenAndServe()
 }
 
 func (h *Handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {

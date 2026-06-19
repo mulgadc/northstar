@@ -306,11 +306,11 @@ address = "10.10.10.50"
 }
 
 func startTestServer() {
-	cfg := config.ReadZoneFiles("./testconfig/")
+	cfg := config.ReadZoneFiles("./testconfig/", nil)
 
 	handler := &backend.Handler{
 		Conf:     cfg,
-		Upstream: backend.NewUpstream(),
+		Upstream: backend.NewUpstream(nil),
 	}
 
 	// UDP server
