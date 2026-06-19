@@ -3,11 +3,11 @@ module github.com/mulgadc/northstar
 go 1.26.4
 
 require (
-	github.com/aws/aws-sdk-go v1.44.266
-	github.com/fsnotify/fsnotify v1.6.0
+	github.com/aws/aws-sdk-go v1.55.8
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/miekg/dns v1.1.72
-	github.com/pelletier/go-toml/v2 v2.0.7
-	github.com/stretchr/testify v1.8.1
+	github.com/pelletier/go-toml/v2 v2.3.1
+	github.com/stretchr/testify v1.11.1
 )
 
 require (
@@ -18,7 +18,7 @@ require (
 	golang.org/x/net v0.56.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
-	golang.org/x/telemetry v0.0.0-20260611141451-d61e87d5f4a3 // indirect
+	golang.org/x/telemetry v0.0.0-20260618151639-a6991f1c6803 // indirect
 	golang.org/x/tools v0.46.0 // indirect
 	golang.org/x/vuln v1.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
