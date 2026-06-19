@@ -36,9 +36,7 @@
 - [ ] Response caching
 - [ ] migrate to github.com/miekg/dns/v2
 - [ ] bump deps
-- [ ] github actions workflow, test/build/lint/race + e2e
 - [ ] dependabot
-- [ ] don't hardcode version in cmd/northstar/main.go, do it how spinifex does it in Makefile
 - [ ] make e2e part of main module, match spinifex
 
 ---
