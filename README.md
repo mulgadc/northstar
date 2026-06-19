@@ -1,12 +1,5 @@
 # Northstar
 
-```
-┌─┐┌─┐┬  ┬┌─┐┌─┐┌─┐
-├┤ │  │  │├─┘└─┐│ │
-└─┘└─┘┴─┘┴┴  └─┘└─┘
-v2.0.0
-```
-
 **Fast, lightweight authoritative DNS server built for infrastructure you own.**
 
 Northstar is a production-grade DNS server written in Go that gives you full control over your DNS infrastructure — no third-party API, no vendor dashboard, no per-query pricing. Define your zones in simple TOML files, store them on disk or in any S3-compatible object store, and let Northstar handle the rest.

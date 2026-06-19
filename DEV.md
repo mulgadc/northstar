@@ -37,9 +37,11 @@
 - [ ] migrate to github.com/miekg/dns/v2
 - [ ] bump deps
 - [ ] add golangci-lint + govulncheck
-- [ ] github actions workflow
-- [ ] add gitignore
+- [ ] github actions workflow, test/build/lint/race + e2e
+- [ ] dependabot
 - [ ] don't hardcode version in cmd/northstar/main.go, do it how spinifex does it in Makefile
+- [ ] make Makefile same format as spinifex, delete go_dep_install eg, rename race to test-race, add make preflight
+- [ ] make e2e part of main module, match spinifex
 
 ---
 

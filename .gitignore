@@ -1,0 +1,20 @@
+# Go workspace
+go.work
+go.work.sum
+
+# Build outputs
+bin/
+tmp/
+*.test
+*.out
+*.prof
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+
+# Test reports
+*-report.txt
