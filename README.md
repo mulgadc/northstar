@@ -264,11 +264,14 @@ docker run \
 ## Testing
 
 ```sh
-make test          # Unit tests (31 tests)
-make race          # Race condition detection
-make bench         # Benchmarks with benchstat
+make test          # Unit tests
+make test-race     # Unit tests with the race detector
+make test-cover    # Unit tests with coverage (fails below threshold)
+make lint          # golangci-lint (use `make fix` to auto-fix)
+make govulncheck   # Dependency vulnerability scan
+make bench         # Benchmarks
 make e2e           # E2E tests via Docker (Predastore + Northstar)
-make test-all      # Unit tests + race detection
+make preflight     # lint + govulncheck + coverage + race
 ```
 
 ## Benchmarking

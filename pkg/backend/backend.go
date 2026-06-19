@@ -24,7 +24,7 @@ func StartDaemon(zone_dir, host, port, tlsCert, tlsKey, dotPort string) error {
 	go cfg.MonitorConfig(zone_dir)
 
 	handler := &Handler{
-		Conf:     &cfg,
+		Conf:     cfg,
 		Upstream: NewUpstream(),
 	}
 
@@ -78,8 +78,12 @@ func StartDaemon(zone_dir, host, port, tlsCert, tlsKey, dotPort string) error {
 	go func() {
 		<-sig
 		slog.Info("shutting down DNS servers")
-		srvUDP.Shutdown()
-		srvTCP.Shutdown()
+		if err := srvUDP.Shutdown(); err != nil {
+			slog.Error("UDP server shutdown failed", "error", err)
+		}
+		if err := srvTCP.Shutdown(); err != nil {
+			slog.Error("TCP server shutdown failed", "error", err)
+		}
 	}()
 
 	slog.Info("starting UDP listener", "addr", addr)
@@ -91,7 +95,7 @@ func (h *Handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	msg.SetReply(r)
 
 	if len(r.Question) == 0 {
-		w.WriteMsg(&msg)
+		writeResponse(w, &msg)
 		return
 	}
 
@@ -104,10 +108,7 @@ func (h *Handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	// Handle EDNS0
 	var clientBufSize uint16 = 512
 	if opt := r.IsEdns0(); opt != nil {
-		clientBufSize = opt.UDPSize()
-		if clientBufSize < 512 {
-			clientBufSize = 512
-		}
+		clientBufSize = max(opt.UDPSize(), 512)
 		// Echo EDNS0 OPT in response
 		ednsOpt := new(dns.OPT)
 		ednsOpt.Hdr.Name = "."
@@ -144,7 +145,7 @@ func (h *Handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 			if qtype == dns.TypeSOA {
 				msg.Authoritative = true
 				msg.Answer = []dns.RR{h.SOA(domain, zone)}
-				w.WriteMsg(&msg)
+				writeResponse(w, &msg)
 				return
 			}
 			// We are authoritative: check if name exists with other types (NODATA vs NXDOMAIN)
@@ -161,7 +162,7 @@ func (h *Handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 			// Not our zone → REFUSED
 			msg.SetRcode(r, dns.RcodeRefused)
 		}
-		w.WriteMsg(&msg)
+		writeResponse(w, &msg)
 		return
 	}
 
@@ -218,7 +219,6 @@ func (h *Handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 
 		case dns.TypeSOA:
 			msg.Answer = []dns.RR{h.SOA(domain, zone)}
-			break
 
 		case dns.TypeTXT:
 			if record.Type == dns.TypeTXT {
@@ -311,7 +311,7 @@ func (h *Handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 		}
 	}
 
-	w.WriteMsg(&msg)
+	writeResponse(w, &msg)
 }
 
 func (h *Handler) lookupExtra(address string, qtype uint16, qclass uint16) []dns.RR {
@@ -382,7 +382,7 @@ func (h *Handler) SOA(domain string, zone string) dns.RR {
 	var serial uint32
 	h.Conf.Mu.RLock()
 	if d, ok := h.Conf.Domain[zone]; ok && !d.Modified.IsZero() {
-		serial = uint32(d.Modified.Unix())
+		serial = uint32(d.Modified.Unix()) //nolint:gosec // G115: SOA serial is uint32 per RFC 1035; second-resolution wrap is acceptable
 	}
 	h.Conf.Mu.RUnlock()
 
@@ -412,4 +412,11 @@ func wildcardFor(name string, zone string) string {
 func isUDP(w dns.ResponseWriter) bool {
 	_, ok := w.RemoteAddr().(*net.UDPAddr)
 	return ok
+}
+
+// writeResponse writes the DNS reply, logging any write error.
+func writeResponse(w dns.ResponseWriter, msg *dns.Msg) {
+	if err := w.WriteMsg(msg); err != nil {
+		slog.Debug("failed to write DNS response", "error", err)
+	}
 }

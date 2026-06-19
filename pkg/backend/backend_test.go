@@ -309,7 +309,7 @@ func startTestServer() {
 	cfg := config.ReadZoneFiles("./testconfig/")
 
 	handler := &backend.Handler{
-		Conf:     &cfg,
+		Conf:     cfg,
 		Upstream: backend.NewUpstream(),
 	}
 
@@ -496,7 +496,7 @@ func TestTXTRecord(t *testing.T) {
 	spfok := strings.HasPrefix(txt[0], "v=spf1 ip:203")
 	assert.True(t, spfok)
 
-	md5str := fmt.Sprintf("site-verification-hello_a.net")
+	md5str := "site-verification-hello_a.net"
 	md5str = fmt.Sprintf("%x", md5.Sum([]byte(md5str)))
 	assert.Equal(t, fmt.Sprintf("google-site-verification=%s", md5str), txt[1])
 }
@@ -700,7 +700,7 @@ func TestConcurrency(t *testing.T) {
 	var wg sync.WaitGroup
 	errors := make(chan error, 100)
 
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()

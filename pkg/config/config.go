@@ -117,7 +117,7 @@ func newS3Session() *session.Session {
 	if os.Getenv("NORTHSTAR_S3_INSECURE") != "" {
 		cfg.HTTPClient = &http.Client{
 			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // G402: opt-in via NORTHSTAR_S3_INSECURE for self-signed S3 endpoints
 			},
 		}
 	}
@@ -133,7 +133,7 @@ func (c *Config) FindZone(name string) (string, bool) {
 
 	// Walk up labels: "foo.bar.example.com." → "bar.example.com." → "example.com."
 	labels := strings.Split(name, ".")
-	for i := 0; i < len(labels); i++ {
+	for i := range labels {
 		candidate := strings.Join(labels[i:], ".")
 		// Strip trailing dot for domain map lookup
 		stripped := strings.TrimSuffix(candidate, ".")
@@ -157,11 +157,12 @@ func (c *Config) NameExists(name string) bool {
 	return false
 }
 
-func GenerateTestDomains(num int) (t Config) {
+func GenerateTestDomains(num int) *Config {
+	t := &Config{}
 	t.Records = make(map[DomainLookup][]Records, 1)
 	t.Domain = make(map[string]Domain, 1)
 
-	for i := 0; i < num; i++ {
+	for i := range num {
 		domain := fmt.Sprintf("test%d.net", i)
 
 		var refs []DomainLookup
@@ -287,7 +288,6 @@ func (config *Config) MonitorConfig(zone_dir string) {
 				}
 			}
 		}()
-
 	} else {
 		watcher, err := fsnotify.NewWatcher()
 		if err != nil {
@@ -427,9 +427,10 @@ func ApplyDefaults(config *ConfigArr, lastModified time.Time) {
 	}
 }
 
-func ReadZoneFiles(zone_dir string) (t Config) {
+func ReadZoneFiles(zone_dir string) *Config {
 	slog.Info("ReadZoneFiles: reading", "dir", zone_dir)
 
+	t := &Config{}
 	t.Domain = make(map[string]Domain, 4)
 	t.Records = make(map[DomainLookup][]Records, 4)
 
@@ -449,7 +450,7 @@ func ReadZoneFiles(zone_dir string) (t Config) {
 		resp, err := svc.ListObjectsV2(&s3.ListObjectsV2Input{Bucket: aws.String(path[1])})
 		if err != nil {
 			slog.Error("unable to list items in bucket", "path", path, "error", err)
-			return
+			return t
 		}
 
 		for _, item := range resp.Contents {
@@ -535,11 +536,11 @@ func ReadZone(zone_file string, lastModified time.Time) (myconfig ConfigArr, err
 	slog.Info("ReadZone: parsing zone file", "file", zone_file, "modified", lastModified)
 
 	if strings.HasPrefix(zone_file, "s3://") {
-		s3path := strings.SplitN(zone_file, "s3://", -1)
+		s3path := strings.Split(zone_file, "s3://")
 		paths := strings.SplitN(s3path[1], "/", 2)
 
 		if len(paths) < 2 {
-			return myconfig, errors.New("Path not found in S3")
+			return myconfig, errors.New("path not found in S3")
 		}
 
 		sess := newS3Session()
@@ -554,33 +555,37 @@ func ReadZone(zone_file string, lastModified time.Time) (myconfig ConfigArr, err
 			})
 
 		if numBytes > 0 {
-			toml.Unmarshal(buff.Bytes(), &myconfig)
+			if err := toml.Unmarshal(buff.Bytes(), &myconfig); err != nil {
+				return myconfig, err
+			}
 			ApplyDefaults(&myconfig, lastModified)
 		} else {
-			return myconfig, errors.New("Config file empty")
+			return myconfig, errors.New("config file empty")
 		}
 	} else {
 		file, err := os.ReadFile(zone_file)
 
 		if err != nil {
-			errorMsg := fmt.Sprintf("Error reading %s %s", zone_file, err)
+			errorMsg := fmt.Sprintf("error reading %s %s", zone_file, err)
 			slog.Warn(errorMsg)
 			return myconfig, errors.New(errorMsg)
 		}
 
-		toml.Unmarshal(file, &myconfig)
+		if err := toml.Unmarshal(file, &myconfig); err != nil {
+			return myconfig, err
+		}
 		ApplyDefaults(&myconfig, lastModified)
 	}
 
-	return
+	return myconfig, err
 }
 
 func checkConfigDomainMatch(filename string, domain string) (err error) {
 	filecheck := strings.Replace(filepath.Base(filename), ".toml", "", 1)
 
 	if filecheck != domain {
-		err = fmt.Errorf("Config file %s (%s) does not match domain entry %s", filename, filecheck, domain)
+		err = fmt.Errorf("config file %s (%s) does not match domain entry %s", filename, filecheck, domain)
 	}
 
-	return
+	return err
 }

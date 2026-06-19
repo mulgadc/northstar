@@ -15,7 +15,7 @@ func TestDomainLookup(t *testing.T) {
 
 	assert.Equal(t, 1000, len(conf.Domain))
 
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		lookup := DomainLookup{Domain: fmt.Sprintf("test%d.net", i), Type: 1, Class: 1}
 		assert.Equal(t, 4, len(conf.Records[lookup]))
 
@@ -260,7 +260,7 @@ func TestAddDeleteZoneConcurrent(t *testing.T) {
 
 	// Add zones concurrently
 	done := make(chan bool, 100)
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		go func(idx int) {
 			zone := ConfigArr{
 				Domain: Domain{
@@ -276,21 +276,21 @@ func TestAddDeleteZoneConcurrent(t *testing.T) {
 		}(i)
 	}
 
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		<-done
 	}
 
 	assert.Equal(t, 100, len(conf.Domain))
 
 	// Delete zones concurrently
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		go func(idx int) {
 			conf.DeleteZone(fmt.Sprintf("test%d.net", idx))
 			done <- true
 		}(i)
 	}
 
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		<-done
 	}
 

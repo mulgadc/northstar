@@ -30,11 +30,11 @@ func NewUpstream() *Upstream {
 
 	envUpstream := os.Getenv("NORTHSTAR_UPSTREAM")
 	if envUpstream != "" {
-		for _, server := range strings.Split(envUpstream, ",") {
+		for server := range strings.SplitSeq(envUpstream, ",") {
 			server = strings.TrimSpace(server)
-			if strings.HasPrefix(server, "tls://") {
+			if after, ok := strings.CutPrefix(server, "tls://"); ok {
 				upstream.Servers = append(upstream.Servers, UpstreamServer{
-					Address: strings.TrimPrefix(server, "tls://"),
+					Address: after,
 					UseTLS:  true,
 				})
 			} else {
