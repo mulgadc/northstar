@@ -20,9 +20,12 @@ build:
 	$(MAKE) go_build
 
 # GO commands
+VERSION ?= $(shell git describe --tags --always --dirty)
+LDFLAGS := -s -w -X main.Version=$(VERSION)
+
 go_build:
 	@echo -e "\n....Building $(GO_PROJECT_NAME)"
-	GOFIPS140=v1.0.0 go build -ldflags "-s -w" -o ./bin/$(GO_PROJECT_NAME) ./cmd/northstar
+	GOFIPS140=v1.0.0 go build -ldflags "$(LDFLAGS)" -o ./bin/$(GO_PROJECT_NAME) ./cmd/northstar
 
 # Build and run locally (override the listen port for non-root, e.g. PORT=5353)
 run: go_build

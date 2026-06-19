@@ -8,7 +8,9 @@ import (
 	"github.com/mulgadc/northstar/pkg/backend"
 )
 
-const northstar_version = "2.0.0"
+// Version is set via ldflags at build time.
+// Example: go build -ldflags "-X main.Version=v1.0.0"
+var Version = "dev"
 
 func main() {
 	var zone_dir = os.Getenv("ZONE_DIR")
@@ -40,7 +42,7 @@ func main() {
 	v%s
 
 
-	`, northstar_version)
+	`, Version)
 
 	err := backend.StartDaemon(zone_dir, host, port, tlsCert, tlsKey, dotPort)
 
