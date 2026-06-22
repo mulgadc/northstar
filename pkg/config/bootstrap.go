@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
-	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
@@ -38,52 +36,7 @@ func RenderBaseZone(seed BaseZoneSeed) ([]byte, error) {
 	if seed.Domain == "" {
 		return nil, errors.New("base zone domain is required")
 	}
-
-	ttl := seed.TTL
-	if ttl == 0 {
-		ttl = defaultBaseZoneTTL
-	}
-
-	var b strings.Builder
-	b.WriteString("version = 1.0\n")
-	b.WriteString("[domain]\n")
-	fmt.Fprintf(&b, "domain = %q\n", seed.Domain)
-	fmt.Fprintf(&b, "modified = %s\n", time.Now().UTC().Format(time.RFC3339))
-	b.WriteString("active = true\n")
-	// Point the SOA MNAME at the first nameserver (a real, glued host) rather
-	// than the backend's synthesized ns.<domain> default.
-	if len(seed.Nameservers) > 0 {
-		fmt.Fprintf(&b, "soa = \"%s.%s.\"\n", seed.Nameservers[0].Host, seed.Domain)
-	}
-	b.WriteString("[defaults]\n")
-	fmt.Fprintf(&b, "ttl = %d\n", ttl)
-	b.WriteString("type = 1\n")
-	b.WriteString("class = 1\n")
-
-	for _, ns := range seed.Nameservers {
-		// Apex NS record pointing at the nameserver hostname.
-		b.WriteString("[[records]]\n")
-		b.WriteString("domain = \"\"\n")
-		b.WriteString("type = 2\n")
-		fmt.Fprintf(&b, "address = \"%s.%s.\"\n", ns.Host, seed.Domain)
-
-		// Glue A record so resolvers can reach the nameserver.
-		if ns.IP != "" {
-			b.WriteString("[[records]]\n")
-			fmt.Fprintf(&b, "domain = %q\n", ns.Host+".")
-			b.WriteString("type = 1\n")
-			fmt.Fprintf(&b, "address = %q\n", ns.IP)
-		}
-	}
-
-	for _, txt := range seed.TXT {
-		b.WriteString("[[records]]\n")
-		b.WriteString("domain = \"\"\n")
-		b.WriteString("type = 16\n")
-		fmt.Fprintf(&b, "address = %q\n", txt)
-	}
-
-	return []byte(b.String()), nil
+	return RenderZone(NewZoneConfig(seed))
 }
 
 // ZoneExists reports whether <domain>.toml is present in the S3 bucket.
