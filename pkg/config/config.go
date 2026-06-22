@@ -522,7 +522,7 @@ func (t *Config) DeleteZone(domain string) {
 // ReadZone parses a single zone file from the filesystem or S3. For an s3://
 // zone_file, s3cfg must be non-nil.
 func ReadZone(zone_file string, lastModified time.Time, s3cfg *S3Config) (myconfig ConfigArr, err error) {
-	slog.Info("ReadZone: parsing zone file", "file", zone_file, "modified", lastModified)
+	slog.Debug("ReadZone: parsing zone file", "file", zone_file, "modified", lastModified)
 
 	if strings.HasPrefix(zone_file, "s3://") {
 		if s3cfg == nil {

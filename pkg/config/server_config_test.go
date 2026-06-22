@@ -19,7 +19,7 @@ func writeTOML(t *testing.T, body string) string {
 func TestLoadServerConfigS3(t *testing.T) {
 	path := writeTOML(t, `
 listen = "0.0.0.0:5300,0.0.0.0:53"
-default_domain = "spinifex.local"
+default_domain = "spx3.net"
 sync_interval = 15
 
 [s3]
@@ -38,7 +38,7 @@ nameservers = ["1.1.1.1:53", "tls://8.8.8.8:853"]
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{"0.0.0.0:5300", "0.0.0.0:53"}, cfg.ListenAddrs())
-	assert.Equal(t, "spinifex.local", cfg.DefaultDomain)
+	assert.Equal(t, "spx3.net", cfg.DefaultDomain)
 	assert.Equal(t, 15, cfg.SyncInterval)
 	assert.Equal(t, "s3://northstar", cfg.ZoneSource())
 	assert.Equal(t, []string{"1.1.1.1:53", "tls://8.8.8.8:853"}, cfg.Upstream.Nameservers)

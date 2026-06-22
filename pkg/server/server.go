@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"sync"
 
 	"github.com/miekg/dns"
@@ -23,9 +24,10 @@ type Server struct {
 	zoneDB  *config.Config
 	handler *backend.Handler
 
-	mu      sync.Mutex
-	servers []*dns.Server
-	cancel  context.CancelFunc
+	mu          sync.Mutex
+	servers     []*dns.Server
+	httpServers []*http.Server
+	cancel      context.CancelFunc
 }
 
 // NewServer constructs a Server from explicit configuration. It does not bind
@@ -75,6 +77,12 @@ func (s *Server) Start(ctx context.Context) error {
 		return err
 	}
 
+	if err := s.listenDoH(); err != nil {
+		cancel()
+		_ = s.Shutdown(context.Background())
+		return err
+	}
+
 	go s.zoneDB.MonitorConfig(ctx, s.cfg.ZoneSource(), s.cfg.S3Pointer(), s.cfg.SyncDuration())
 
 	return nil
@@ -101,12 +109,19 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 	s.mu.Lock()
 	servers := s.servers
+	httpServers := s.httpServers
 	s.servers = nil
+	s.httpServers = nil
 	s.mu.Unlock()
 
 	var firstErr error
 	for _, srv := range servers {
 		if err := srv.ShutdownContext(ctx); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	for _, srv := range httpServers {
+		if err := srv.Shutdown(ctx); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -160,6 +175,12 @@ func (s *Server) listenDoT() error {
 func (s *Server) track(servers ...*dns.Server) {
 	s.mu.Lock()
 	s.servers = append(s.servers, servers...)
+	s.mu.Unlock()
+}
+
+func (s *Server) trackHTTP(srv *http.Server) {
+	s.mu.Lock()
+	s.httpServers = append(s.httpServers, srv)
 	s.mu.Unlock()
 }
 

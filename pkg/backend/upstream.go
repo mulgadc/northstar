@@ -46,6 +46,53 @@ func ParseUpstreamServers(nameservers []string) []UpstreamServer {
 	return servers
 }
 
+// HasServers reports whether any upstream forwarder is configured.
+func (u *Upstream) HasServers() bool {
+	return len(u.Servers) > 0
+}
+
+// clientFor builds a DNS client for an upstream server (plaintext or DoT).
+func clientFor(server UpstreamServer) *dns.Client {
+	if server.UseTLS {
+		return &dns.Client{
+			Net:       "tcp-tls",
+			Timeout:   3 * time.Second,
+			TLSConfig: &tls.Config{ServerName: serverNameFromAddr(server.Address)},
+		}
+	}
+	return &dns.Client{Timeout: 3 * time.Second}
+}
+
+// Exchange forwards a complete query to the upstream servers with failover and
+// returns the first successful response. Used to recurse non-authoritative
+// names to the configured forwarders.
+func (u *Upstream) Exchange(r *dns.Msg) (*dns.Msg, error) {
+	if len(u.Servers) == 0 {
+		return nil, errors.New("no upstream servers configured")
+	}
+
+	m := r.Copy()
+	m.RecursionDesired = true
+
+	var lastErr error
+	for _, server := range u.Servers {
+		in, _, err := clientFor(server).Exchange(m, server.Address)
+		if err != nil {
+			slog.Debug("upstream failed", "server", server.Address, "error", err)
+			lastErr = err
+			continue
+		}
+		if in != nil {
+			return in, nil
+		}
+	}
+
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, errors.New("all upstream servers failed")
+}
+
 // Resolve performs a DNS lookup against upstream servers with failover.
 func (u *Upstream) Resolve(name string, qtype uint16) ([]dns.RR, error) {
 	m := new(dns.Msg)
@@ -56,23 +103,7 @@ func (u *Upstream) Resolve(name string, qtype uint16) ([]dns.RR, error) {
 	var lastErr error
 
 	for _, server := range u.Servers {
-		var client *dns.Client
-
-		if server.UseTLS {
-			client = &dns.Client{
-				Net:     "tcp-tls",
-				Timeout: 3 * time.Second,
-				TLSConfig: &tls.Config{
-					ServerName: serverNameFromAddr(server.Address),
-				},
-			}
-		} else {
-			client = &dns.Client{
-				Timeout: 3 * time.Second,
-			}
-		}
-
-		in, _, err := client.Exchange(m, server.Address)
+		in, _, err := clientFor(server).Exchange(m, server.Address)
 		if err != nil {
 			slog.Debug("upstream failed", "server", server.Address, "error", err)
 			lastErr = err

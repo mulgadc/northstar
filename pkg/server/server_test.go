@@ -100,3 +100,28 @@ func TestServerStartNoListenAddrs(t *testing.T) {
 	require.NoError(t, err)
 	require.Error(t, srv.Start(context.Background()))
 }
+
+func TestServerStartBindError(t *testing.T) {
+	// Port out of range → UDP/TCP bind fails and Start returns the error.
+	srv, err := server.NewServer(config.ServerConfig{Listen: "127.0.0.1:99999", ZoneDir: t.TempDir()})
+	require.NoError(t, err)
+	require.Error(t, srv.Start(context.Background()))
+}
+
+func TestServerStartDoTMissingCert(t *testing.T) {
+	addr := fmt.Sprintf("127.0.0.1:%d", freePort(t))
+	dot := fmt.Sprintf("127.0.0.1:%d", freePort(t))
+	srv, err := server.NewServer(config.ServerConfig{Listen: addr, DotListen: dot, ZoneDir: t.TempDir()})
+	require.NoError(t, err)
+	require.Error(t, srv.Start(context.Background()))
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+}
+
+func TestServerStartDoHMissingCert(t *testing.T) {
+	addr := fmt.Sprintf("127.0.0.1:%d", freePort(t))
+	doh := fmt.Sprintf("127.0.0.1:%d", freePort(t))
+	srv, err := server.NewServer(config.ServerConfig{Listen: addr, DohListen: doh, ZoneDir: t.TempDir()})
+	require.NoError(t, err)
+	require.Error(t, srv.Start(context.Background()))
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+}

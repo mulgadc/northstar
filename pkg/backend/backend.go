@@ -28,7 +28,7 @@ func (h *Handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	qtype := r.Question[0].Qtype
 	qclass := r.Question[0].Qclass
 
-	slog.Info("DNS request", "domain", domain, "client", w.RemoteAddr().String(), "type", qtype)
+	slog.Debug("DNS request", "domain", domain, "client", w.RemoteAddr().String(), "type", qtype)
 
 	// Handle EDNS0
 	var clientBufSize uint16 = 512
@@ -84,8 +84,19 @@ func (h *Handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 			msg.Authoritative = true
 			msg.Ns = []dns.RR{h.SOA(domain, zone)}
 		} else {
-			// Not our zone → REFUSED
-			msg.SetRcode(r, dns.RcodeRefused)
+			// Not our zone → recurse to the configured upstream forwarders.
+			// With no forwarders configured we refuse (air-gap safe).
+			if h.Upstream != nil && h.Upstream.HasServers() {
+				if resp, err := h.Upstream.Exchange(r); err == nil && resp != nil {
+					resp.Id = r.Id
+					writeResponse(w, resp)
+					return
+				}
+				slog.Debug("recursion failed", "domain", domain)
+				msg.SetRcode(r, dns.RcodeServerFailure)
+			} else {
+				msg.SetRcode(r, dns.RcodeRefused)
+			}
 		}
 		writeResponse(w, &msg)
 		return

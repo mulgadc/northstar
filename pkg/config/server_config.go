@@ -17,6 +17,7 @@ type ServerConfig struct {
 	// "0.0.0.0:5300,0.0.0.0:53".
 	Listen        string         `toml:"listen"`
 	DotListen     string         `toml:"dot_listen"`
+	DohListen     string         `toml:"doh_listen"`
 	TLSCert       string         `toml:"tls_cert"`
 	TLSKey        string         `toml:"tls_key"`
 	DefaultDomain string         `toml:"default_domain"`
