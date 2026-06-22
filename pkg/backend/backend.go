@@ -89,6 +89,12 @@ func (h *Handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 			if h.Upstream != nil && h.Upstream.HasServers() {
 				if resp, err := h.Upstream.Exchange(r); err == nil && resp != nil {
 					resp.Id = r.Id
+					// Over UDP, trim to the client's advertised buffer; if the
+					// full answer doesn't fit, Truncate sets TC so the client
+					// retries over TCP. Over TCP the full answer is returned.
+					if isUDP(w) {
+						resp.Truncate(int(clientBufSize))
+					}
 					writeResponse(w, resp)
 					return
 				}

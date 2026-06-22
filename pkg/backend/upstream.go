@@ -46,21 +46,71 @@ func ParseUpstreamServers(nameservers []string) []UpstreamServer {
 	return servers
 }
 
+// Timeouts and EDNS sizing for upstream queries. Values track common resolver
+// defaults: a 2s connect bound and a 5s reply wait (the resolv.conf `timeout:5`
+// default used by glibc/systemd-resolved), with sequential failover to the next
+// server. The advertised EDNS0 UDP payload is 1232 bytes, the DNS flag-day 2020
+// recommendation also used by unbound/dnsmasq, which avoids most fragmentation
+// while still fitting large answers in a single UDP round-trip.
+const (
+	upstreamDialTimeout = 2 * time.Second
+	upstreamReadTimeout = 5 * time.Second
+	upstreamUDPBufSize  = 1232
+)
+
 // HasServers reports whether any upstream forwarder is configured.
 func (u *Upstream) HasServers() bool {
 	return len(u.Servers) > 0
 }
 
-// clientFor builds a DNS client for an upstream server (plaintext or DoT).
-func clientFor(server UpstreamServer) *dns.Client {
+// udpClient / tcpClient / tlsClient build transport-specific upstream clients.
+func udpClient() *dns.Client {
+	return &dns.Client{Net: "udp", DialTimeout: upstreamDialTimeout, ReadTimeout: upstreamReadTimeout, WriteTimeout: upstreamDialTimeout}
+}
+
+func tcpClient() *dns.Client {
+	return &dns.Client{Net: "tcp", DialTimeout: upstreamDialTimeout, ReadTimeout: upstreamReadTimeout, WriteTimeout: upstreamDialTimeout}
+}
+
+func tlsClient(server UpstreamServer) *dns.Client {
+	return &dns.Client{
+		Net:          "tcp-tls",
+		DialTimeout:  upstreamDialTimeout,
+		ReadTimeout:  upstreamReadTimeout,
+		WriteTimeout: upstreamDialTimeout,
+		TLSConfig:    &tls.Config{ServerName: serverNameFromAddr(server.Address)},
+	}
+}
+
+// exchangeServer sends m to a single upstream. Plaintext queries go out over UDP
+// first and retry over TCP when the reply is truncated (TC bit), exactly as a
+// normal forwarding resolver does; DoT servers use a single TCP-TLS stream.
+func exchangeServer(server UpstreamServer, m *dns.Msg) (*dns.Msg, error) {
 	if server.UseTLS {
-		return &dns.Client{
-			Net:       "tcp-tls",
-			Timeout:   3 * time.Second,
-			TLSConfig: &tls.Config{ServerName: serverNameFromAddr(server.Address)},
+		in, _, err := tlsClient(server).Exchange(m, server.Address)
+		return in, err
+	}
+
+	in, _, err := udpClient().Exchange(m, server.Address)
+	if err != nil {
+		return nil, err
+	}
+	if in != nil && in.Truncated {
+		if tin, _, terr := tcpClient().Exchange(m, server.Address); terr == nil && tin != nil {
+			return tin, nil
 		}
 	}
-	return &dns.Client{Timeout: 3 * time.Second}
+	return in, nil
+}
+
+// withUpstreamEDNS sets/raises the outgoing EDNS0 UDP buffer to our advertised
+// size so upstream returns full answers regardless of what the client asked for.
+func withUpstreamEDNS(m *dns.Msg) {
+	if opt := m.IsEdns0(); opt != nil {
+		opt.SetUDPSize(upstreamUDPBufSize)
+		return
+	}
+	m.SetEdns0(upstreamUDPBufSize, false)
 }
 
 // Exchange forwards a complete query to the upstream servers with failover and
@@ -73,10 +123,11 @@ func (u *Upstream) Exchange(r *dns.Msg) (*dns.Msg, error) {
 
 	m := r.Copy()
 	m.RecursionDesired = true
+	withUpstreamEDNS(m)
 
 	var lastErr error
 	for _, server := range u.Servers {
-		in, _, err := clientFor(server).Exchange(m, server.Address)
+		in, err := exchangeServer(server, m)
 		if err != nil {
 			slog.Debug("upstream failed", "server", server.Address, "error", err)
 			lastErr = err
@@ -99,11 +150,12 @@ func (u *Upstream) Resolve(name string, qtype uint16) ([]dns.RR, error) {
 	m.Id = dns.Id()
 	m.RecursionDesired = true
 	m.Question = []dns.Question{{Name: dns.Fqdn(name), Qtype: qtype, Qclass: dns.ClassINET}}
+	withUpstreamEDNS(m)
 
 	var lastErr error
 
 	for _, server := range u.Servers {
-		in, _, err := clientFor(server).Exchange(m, server.Address)
+		in, err := exchangeServer(server, m)
 		if err != nil {
 			slog.Debug("upstream failed", "server", server.Address, "error", err)
 			lastErr = err

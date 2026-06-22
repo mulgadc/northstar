@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -79,6 +80,47 @@ func fakeUpstream(t *testing.T, answerName, answerIP string) string {
 	go func() { _ = ds.ActivateAndServe() }()
 	t.Cleanup(func() { _ = ds.Shutdown() })
 	return pc.LocalAddr().String()
+}
+
+// fakeUpstreamTXT runs an in-process resolver (UDP + TCP on the same port) that
+// answers a name with a set of TXT records, emulating a real resolver: it sets
+// the TC bit and trims answers when a UDP reply would exceed the client's
+// advertised buffer, so a correct forwarder must retry over TCP.
+func fakeUpstreamTXT(t *testing.T, name string, txt []string) string {
+	t.Helper()
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := pc.LocalAddr().String()
+	l, err := net.Listen("tcp", addr)
+	require.NoError(t, err)
+
+	handler := dns.HandlerFunc(func(w dns.ResponseWriter, r *dns.Msg) {
+		m := new(dns.Msg)
+		m.SetReply(r)
+		if len(r.Question) > 0 && r.Question[0].Name == dns.Fqdn(name) {
+			for _, s := range txt {
+				m.Answer = append(m.Answer, &dns.TXT{
+					Hdr: dns.RR_Header{Name: dns.Fqdn(name), Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 60},
+					Txt: []string{s},
+				})
+			}
+		}
+		if _, isUDP := w.RemoteAddr().(*net.UDPAddr); isUDP {
+			size := 512
+			if opt := r.IsEdns0(); opt != nil {
+				size = int(opt.UDPSize())
+			}
+			m.Truncate(size)
+		}
+		_ = w.WriteMsg(m)
+	})
+
+	udp := &dns.Server{PacketConn: pc, Handler: handler}
+	tcp := &dns.Server{Listener: l, Handler: handler}
+	go func() { _ = udp.ActivateAndServe() }()
+	go func() { _ = tcp.ActivateAndServe() }()
+	t.Cleanup(func() { _ = udp.Shutdown(); _ = tcp.Shutdown() })
+	return addr
 }
 
 // startServer builds a northstar server with a local zone, the given upstream
@@ -266,6 +308,50 @@ func TestRecursionRefusedNoUpstream(t *testing.T) {
 
 	r := queryNet(t, "udp", udpAddr, "cnn.com", dns.TypeA)
 	assert.Equal(t, dns.RcodeRefused, r.Rcode)
+}
+
+// TestRecursionLargeTXT verifies that a large recursive answer (one that the
+// upstream truncates over UDP) is fetched in full via the upstream TCP retry and
+// returned intact to a TCP client, while a UDP client gets a TC-flagged reply
+// that prompts its own TCP retry. This is the cnn.com TXT regression.
+func TestRecursionLargeTXT(t *testing.T) {
+	dir := t.TempDir()
+	writeZone(t, dir, "local.spx3.net", "10.0.0.9")
+
+	// ~2 KB of TXT data: exceeds the 1232-byte EDNS buffer, forcing upstream
+	// truncation and a TCP fallback.
+	var txt []string
+	for i := range 10 {
+		txt = append(txt, strings.Repeat(fmt.Sprintf("v=spf%d-", i), 25))
+	}
+	upstreamAddr := fakeUpstreamTXT(t, "big.example", txt)
+
+	_, udpAddr, _, _ := startServer(t, dir, []string{upstreamAddr})
+
+	// TCP client receives the complete answer set.
+	rTCP := queryNet(t, "tcp", udpAddr, "big.example", dns.TypeTXT)
+	assert.Equal(t, dns.RcodeSuccess, rTCP.Rcode)
+	assert.False(t, rTCP.Truncated)
+	assert.Len(t, rTCP.Answer, len(txt))
+
+	// A UDP client with a small buffer gets a truncated reply (TC set) so it
+	// knows to retry over TCP — never an empty NOERROR.
+	c := dns.Client{Net: "udp"}
+	m := new(dns.Msg)
+	m.SetQuestion("big.example.", dns.TypeTXT)
+	rUDP, _, err := c.Exchange(m, udpAddr)
+	require.NoError(t, err)
+	assert.True(t, rUDP.Truncated)
+
+	// A UDP client advertising a large EDNS buffer gets the full answer inline.
+	c2 := dns.Client{Net: "udp", UDPSize: 4096}
+	m2 := new(dns.Msg)
+	m2.SetQuestion("big.example.", dns.TypeTXT)
+	m2.SetEdns0(4096, false)
+	rBig, _, err := c2.Exchange(m2, udpAddr)
+	require.NoError(t, err)
+	assert.False(t, rBig.Truncated)
+	assert.Len(t, rBig.Answer, len(txt))
 }
 
 // TestDoHErrors verifies the DoH endpoint rejects malformed requests with the
