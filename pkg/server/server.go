@@ -6,11 +6,14 @@ package server
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/miekg/dns"
 	"github.com/mulgadc/northstar/pkg/backend"
@@ -98,6 +101,25 @@ func (s *Server) Reload() error {
 	s.zoneDB.Domain = fresh.Domain
 	s.zoneDB.Mu.Unlock()
 
+	return nil
+}
+
+// ReloadZone re-reads a single zone from the configured source and atomically
+// swaps just that zone in the live database, leaving all other zones untouched.
+// This is the control-plane fast-path: a record change is served immediately
+// instead of after the SyncInterval poll, and the cost is one zone fetch rather
+// than a full database rebuild.
+func (s *Server) ReloadZone(zone string) error {
+	zone = strings.TrimSuffix(strings.TrimSpace(zone), ".")
+	if zone == "" {
+		return errors.New("reload zone: empty zone name")
+	}
+	path := s.cfg.ZoneSource() + "/" + zone + ".toml"
+	fresh, err := config.ReadZone(path, time.Now(), s.cfg.S3Pointer())
+	if err != nil {
+		return fmt.Errorf("reload zone %s: %w", zone, err)
+	}
+	s.zoneDB.ReplaceZone(fresh)
 	return nil
 }
 

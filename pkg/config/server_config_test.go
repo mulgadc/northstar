@@ -58,8 +58,20 @@ func TestLoadServerConfigDefaults(t *testing.T) {
 
 	assert.Equal(t, defaultListen, cfg.Listen)
 	assert.Equal(t, defaultSyncInterval, cfg.SyncInterval)
+	assert.Equal(t, defaultInternalDomain, cfg.InternalDomain)
 	assert.Equal(t, "/etc/spinifex/zones", cfg.ZoneSource())
 	assert.Nil(t, cfg.S3Pointer())
+}
+
+func TestLoadServerConfigInternalAndNats(t *testing.T) {
+	path := writeTOML(t, `zone_dir = "/z"
+internal_domain = "internal.example"
+nats_url = "nats://127.0.0.1:4222"`)
+
+	cfg, err := LoadServerConfig(path)
+	require.NoError(t, err)
+	assert.Equal(t, "internal.example", cfg.InternalDomain)
+	assert.Equal(t, "nats://127.0.0.1:4222", cfg.NatsURL)
 }
 
 func TestLoadServerConfigMissingFile(t *testing.T) {

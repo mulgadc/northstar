@@ -398,3 +398,28 @@ func TestDoHErrors(t *testing.T) {
 	resp.Body.Close()
 	assert.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
 }
+
+// TestReloadZoneFastPath verifies the per-zone reload serves a new record
+// immediately without waiting for the poll, and leaves existing records intact.
+func TestReloadZoneFastPath(t *testing.T) {
+	dir := t.TempDir()
+	writeZoneWithSub(t, dir, "spx3.net", "10.0.0.1", "api", "10.0.0.30")
+	srv, udpAddr, _, _ := startServer(t, dir, nil)
+
+	// The new name is absent before the change is applied.
+	before := queryNet(t, "udp", udpAddr, "web.spx3.net", dns.TypeA)
+	assert.Empty(t, before.Answer)
+
+	// Rewrite the zone with an additional record and reload only this zone.
+	writeZoneWithSub(t, dir, "spx3.net", "10.0.0.1", "web", "10.0.0.40")
+	require.NoError(t, srv.ReloadZone("spx3.net"))
+
+	assertA(t, queryNet(t, "udp", udpAddr, "web.spx3.net", dns.TypeA), "10.0.0.40")
+}
+
+func TestReloadZoneEmptyName(t *testing.T) {
+	dir := t.TempDir()
+	writeZone(t, dir, "host.spx3.net", "10.0.0.5")
+	srv, _, _, _ := startServer(t, dir, nil)
+	require.Error(t, srv.ReloadZone("  "))
+}

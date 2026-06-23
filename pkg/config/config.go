@@ -501,6 +501,32 @@ func (t *Config) AddZone(myconfig ConfigArr) {
 	slog.Info("added zone to local DNS DB", "domain", myconfig.Domain.Domain)
 }
 
+// ReplaceZone atomically swaps a single zone's records and metadata in the live
+// store, leaving every other zone untouched. This is the per-zone reload path:
+// applying one changed zone must not rebuild the whole database (which may hold
+// many thousands of zones).
+func (t *Config) ReplaceZone(myconfig ConfigArr) {
+	t.Mu.Lock()
+	defer t.Mu.Unlock()
+
+	// Drop the previous incarnation of this zone, if present.
+	if old, ok := t.Domain[myconfig.Domain.Domain]; ok {
+		for _, ref := range old.RecordRef {
+			delete(t.Records, ref)
+		}
+	}
+
+	myconfig.Domain.RecordRef = nil
+	for _, item := range myconfig.Records {
+		record := DomainLookup{Domain: item.Domain, Type: item.Type, Class: item.Class}
+		t.Records[record] = append(t.Records[record], item)
+		myconfig.Domain.RecordRef = append(myconfig.Domain.RecordRef, record)
+	}
+	t.Domain[myconfig.Domain.Domain] = myconfig.Domain
+
+	slog.Info("replaced zone in local DNS DB", "domain", myconfig.Domain.Domain, "records", len(myconfig.Records))
+}
+
 func (t *Config) DeleteZone(domain string) {
 	t.Mu.Lock()
 	defer t.Mu.Unlock()
