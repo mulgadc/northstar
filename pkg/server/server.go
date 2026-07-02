@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/miekg/dns"
 	"github.com/mulgadc/northstar/pkg/backend"
@@ -98,6 +99,22 @@ func (s *Server) Reload() error {
 	s.zoneDB.Domain = fresh.Domain
 	s.zoneDB.Mu.Unlock()
 
+	return nil
+}
+
+// ReloadZone re-reads a single zone from the configured source and swaps it
+// into the in-memory zone database, leaving every other zone untouched.
+func (s *Server) ReloadZone(zone string) error {
+	src := fmt.Sprintf("%s/%s.toml", s.cfg.ZoneSource(), zone)
+	fresh, err := config.ReadZone(src, time.Now().UTC(), s.cfg.S3Pointer())
+	if err != nil {
+		return fmt.Errorf("read zone %s: %w", zone, err)
+	}
+	if fresh.Domain.Domain != zone {
+		return fmt.Errorf("zone file %s.toml declares domain %q", zone, fresh.Domain.Domain)
+	}
+	s.zoneDB.DeleteZone(zone)
+	s.zoneDB.AddZone(fresh)
 	return nil
 }
 

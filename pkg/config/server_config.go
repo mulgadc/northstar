@@ -15,16 +15,22 @@ import (
 type ServerConfig struct {
 	// Listen is a comma-separated list of UDP+TCP bind addresses, e.g.
 	// "0.0.0.0:5300,0.0.0.0:53".
-	Listen        string         `toml:"listen"`
-	DotListen     string         `toml:"dot_listen"`
-	DohListen     string         `toml:"doh_listen"`
-	TLSCert       string         `toml:"tls_cert"`
-	TLSKey        string         `toml:"tls_key"`
-	DefaultDomain string         `toml:"default_domain"`
-	SyncInterval  int            `toml:"sync_interval"`
-	ZoneDir       string         `toml:"zone_dir"`
-	S3            S3Config       `toml:"s3"`
-	Upstream      UpstreamConfig `toml:"upstream"`
+	Listen        string `toml:"listen"`
+	DotListen     string `toml:"dot_listen"`
+	DohListen     string `toml:"doh_listen"`
+	TLSCert       string `toml:"tls_cert"`
+	TLSKey        string `toml:"tls_key"`
+	DefaultDomain string `toml:"default_domain"`
+	// InternalDomain is the AWS-parity private zone (e.g. "compute.internal")
+	// served alongside DefaultDomain for instance private DNS names.
+	InternalDomain string `toml:"internal_domain"`
+	// NatsURL enables the live zone-reload fast-path when set; the S3 sync
+	// poll remains the backstop.
+	NatsURL      string         `toml:"nats_url"`
+	SyncInterval int            `toml:"sync_interval"`
+	ZoneDir      string         `toml:"zone_dir"`
+	S3           S3Config       `toml:"s3"`
+	Upstream     UpstreamConfig `toml:"upstream"`
 }
 
 // UpstreamConfig lists forwarders for non-authoritative queries. An empty list
@@ -34,8 +40,9 @@ type UpstreamConfig struct {
 }
 
 const (
-	defaultListen       = "0.0.0.0:5300"
-	defaultSyncInterval = 30
+	defaultListen         = "0.0.0.0:5300"
+	defaultSyncInterval   = 30
+	defaultInternalDomain = "compute.internal"
 )
 
 // LoadServerConfig reads and validates a northstar.toml file, applying defaults.
@@ -66,6 +73,9 @@ func (c *ServerConfig) applyDefaults() {
 	}
 	if c.SyncInterval <= 0 {
 		c.SyncInterval = defaultSyncInterval
+	}
+	if c.InternalDomain == "" {
+		c.InternalDomain = defaultInternalDomain
 	}
 }
 
