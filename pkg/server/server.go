@@ -90,9 +90,13 @@ func (s *Server) Start(ctx context.Context) error {
 }
 
 // Reload re-reads all zones from the configured source and atomically swaps the
-// in-memory zone database.
+// in-memory zone database. On a source enumeration failure the existing zone DB
+// is kept untouched, so a transient S3 outage cannot wipe authoritative data.
 func (s *Server) Reload() error {
-	fresh := config.ReadZoneFiles(s.cfg.ZoneSource(), s.cfg.S3Pointer())
+	fresh, err := config.ReadZoneFiles(s.cfg.ZoneSource(), s.cfg.S3Pointer())
+	if err != nil {
+		return fmt.Errorf("reload zones: %w", err)
+	}
 
 	s.zoneDB.Mu.Lock()
 	s.zoneDB.Records = fresh.Records

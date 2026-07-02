@@ -101,19 +101,22 @@ func EnsureBaseZone(s3cfg *S3Config, seed BaseZoneSeed) (bool, error) {
 	return true, nil
 }
 
-// isNotFound reports whether an S3 error is a 404 (missing key/bucket), tolerant
-// of the various codes S3-compatible backends return for HeadObject.
+// isNotFound reports whether an S3 error means the object is absent, tolerant
+// of the various codes S3-compatible backends return for HeadObject. A missing
+// bucket (NoSuchBucket) is a misprovisioned zone store, not a missing object.
 func isNotFound(err error) bool {
-	var rf awserr.RequestFailure
-	if errors.As(err, &rf) && rf.StatusCode() == 404 {
-		return true
-	}
 	var aerr awserr.Error
 	if errors.As(err, &aerr) {
 		switch aerr.Code() {
+		case s3.ErrCodeNoSuchBucket:
+			return false
 		case s3.ErrCodeNoSuchKey, "NotFound":
 			return true
 		}
+	}
+	var rf awserr.RequestFailure
+	if errors.As(err, &rf) && rf.StatusCode() == 404 {
+		return true
 	}
 	return false
 }

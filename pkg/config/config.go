@@ -408,8 +408,9 @@ func ApplyDefaults(config *ConfigArr, lastModified time.Time) {
 }
 
 // ReadZoneFiles loads all zone files from zone_dir. For an s3:// zone_dir, s3cfg
-// must be non-nil; otherwise it reads from the local filesystem.
-func ReadZoneFiles(zone_dir string, s3cfg *S3Config) *Config {
+// must be non-nil; otherwise it reads from the local filesystem. A failure to
+// enumerate the source returns an error; individual bad zones are logged and skipped.
+func ReadZoneFiles(zone_dir string, s3cfg *S3Config) (*Config, error) {
 	slog.Info("ReadZoneFiles: reading", "dir", zone_dir)
 
 	t := &Config{}
@@ -420,8 +421,7 @@ func ReadZoneFiles(zone_dir string, s3cfg *S3Config) *Config {
 
 	if strings.HasPrefix(zone_dir, "s3://") {
 		if s3cfg == nil {
-			slog.Error("ReadZoneFiles: s3:// zone_dir requires S3 config", "zone_dir", zone_dir)
-			return t
+			return nil, fmt.Errorf("s3:// zone_dir %q requires S3 config", zone_dir)
 		}
 
 		sess := newS3Session(s3cfg)
@@ -430,14 +430,12 @@ func ReadZoneFiles(zone_dir string, s3cfg *S3Config) *Config {
 		path := strings.Split(zone_dir, "s3://")
 
 		if len(path) < 2 {
-			slog.Error("ReadZoneFiles: invalid s3:// zone_dir", "zone_dir", zone_dir)
-			return t
+			return nil, fmt.Errorf("invalid s3:// zone_dir %q", zone_dir)
 		}
 
 		resp, err := svc.ListObjectsV2(&s3.ListObjectsV2Input{Bucket: aws.String(path[1])})
 		if err != nil {
-			slog.Error("unable to list items in bucket", "bucket", path[1], "error", err)
-			return t
+			return nil, fmt.Errorf("list bucket %s: %w", path[1], err)
 		}
 
 		for _, item := range resp.Contents {
@@ -461,7 +459,7 @@ func ReadZoneFiles(zone_dir string, s3cfg *S3Config) *Config {
 		files, err := os.ReadDir(zone_dir)
 
 		if err != nil {
-			slog.Error("failed reading directory", "error", err)
+			return nil, fmt.Errorf("read zone dir %s: %w", zone_dir, err)
 		}
 
 		for _, file := range files {
@@ -483,7 +481,7 @@ func ReadZoneFiles(zone_dir string, s3cfg *S3Config) *Config {
 	elapsed := time.Since(start)
 	slog.Info("config files read", "elapsed", elapsed)
 
-	return t
+	return t, nil
 }
 
 func (t *Config) AddZone(myconfig ConfigArr) {

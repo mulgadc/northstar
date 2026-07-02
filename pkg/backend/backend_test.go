@@ -306,7 +306,10 @@ address = "10.10.10.50"
 }
 
 func startTestServer() {
-	cfg := config.ReadZoneFiles("./testconfig/", nil)
+	cfg, err := config.ReadZoneFiles("./testconfig/", nil)
+	if err != nil {
+		panic(err)
+	}
 
 	handler := &backend.Handler{
 		Conf:     cfg,
