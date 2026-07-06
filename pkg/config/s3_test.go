@@ -77,7 +77,8 @@ func TestReadZoneFilesS3(t *testing.T) {
 	}
 	s3cfg := fakeS3(t, "northstar", objects)
 
-	cfg := ReadZoneFiles("s3://northstar", s3cfg)
+	cfg, err := ReadZoneFiles("s3://northstar", s3cfg)
+	require.NoError(t, err)
 	assert.Len(t, cfg.Domain, 2)
 	require.NotEmpty(t, apexRecords(cfg, "one.test"))
 	require.NotEmpty(t, apexRecords(cfg, "two.test"))

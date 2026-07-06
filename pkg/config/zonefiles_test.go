@@ -75,22 +75,24 @@ func TestReadZoneFilesDir(t *testing.T) {
 	// A non-zone file is ignored.
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("ignore"), 0o600))
 
-	cfg := ReadZoneFiles(dir, nil)
+	cfg, err := ReadZoneFiles(dir, nil)
+	require.NoError(t, err)
 	assert.Len(t, cfg.Domain, 2)
 	require.NotEmpty(t, apexRecords(cfg, "one.test"))
 	require.NotEmpty(t, apexRecords(cfg, "two.test"))
 }
 
 func TestReadZoneFilesS3NoConfig(t *testing.T) {
-	cfg := ReadZoneFiles("s3://bucket", nil)
-	assert.Empty(t, cfg.Domain)
+	_, err := ReadZoneFiles("s3://bucket", nil)
+	require.Error(t, err)
 }
 
 func TestMonitorConfigFilesystem(t *testing.T) {
 	dir := t.TempDir()
 	writeZoneFile(t, dir, "initial.test", "10.0.0.1")
 
-	cfg := ReadZoneFiles(dir, nil)
+	cfg, err := ReadZoneFiles(dir, nil)
+	require.NoError(t, err)
 	require.NotEmpty(t, apexRecords(cfg, "initial.test"))
 
 	go cfg.MonitorConfig(t.Context(), dir, nil, time.Second)

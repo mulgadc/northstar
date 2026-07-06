@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go/aws/awserr"
+	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -128,7 +130,8 @@ func TestEnsureBaseZoneCreatesThenIdempotent(t *testing.T) {
 	require.Contains(t, objects, "spx3.net.toml")
 
 	// It is readable back through the normal S3 zone reader.
-	full := ReadZoneFiles("s3://northstar", s3cfg)
+	full, err := ReadZoneFiles("s3://northstar", s3cfg)
+	require.NoError(t, err)
 	require.Contains(t, full.Domain, "spx3.net")
 
 	// Second call is a no-op — never overwrites.
@@ -137,6 +140,18 @@ func TestEnsureBaseZoneCreatesThenIdempotent(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, created)
 	assert.Equal(t, original, objects["spx3.net.toml"])
+}
+
+func TestIsNotFound(t *testing.T) {
+	assert.True(t, isNotFound(awserr.New(s3.ErrCodeNoSuchKey, "no such key", nil)))
+	assert.True(t, isNotFound(awserr.New("NotFound", "not found", nil)))
+	assert.True(t, isNotFound(awserr.NewRequestFailure(awserr.New("Whatever", "gone", nil), 404, "req")))
+	// A missing bucket is a misprovisioned store, never a missing object —
+	// even when the backend wraps it in an HTTP 404.
+	assert.False(t, isNotFound(awserr.New(s3.ErrCodeNoSuchBucket, "no such bucket", nil)))
+	assert.False(t, isNotFound(awserr.NewRequestFailure(awserr.New(s3.ErrCodeNoSuchBucket, "no such bucket", nil), 404, "req")))
+	assert.False(t, isNotFound(awserr.NewRequestFailure(awserr.New("AccessDenied", "denied", nil), 403, "req")))
+	assert.False(t, isNotFound(io.EOF))
 }
 
 func TestZoneExistsMissing(t *testing.T) {
