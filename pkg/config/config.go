@@ -19,6 +19,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	"github.com/fsnotify/fsnotify"
+	"github.com/mulgadc/northstar/pkg/telemetry"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -88,7 +89,7 @@ func init() {
 		level.Set(slog.LevelDebug)
 	}
 
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
+	telemetry.SetDefaultJSONLogger(level)
 }
 
 // newS3Session creates an AWS session with optional custom endpoint support
