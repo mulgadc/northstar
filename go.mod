@@ -8,12 +8,15 @@ require (
 	github.com/miekg/dns v1.1.72
 	github.com/pelletier/go-toml/v2 v2.4.2
 	github.com/stretchr/testify v1.11.1
+	go.opentelemetry.io/otel/trace v1.44.0
 )
 
 require (
+	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
+	go.opentelemetry.io/otel v1.44.0 // indirect
 	golang.org/x/mod v0.37.0 // indirect
 	golang.org/x/net v0.56.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect
