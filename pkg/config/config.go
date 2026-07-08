@@ -19,6 +19,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	"github.com/fsnotify/fsnotify"
+	"github.com/mulgadc/northstar/pkg/telemetry"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -86,6 +87,22 @@ type S3Config struct {
 	AccessKey string `toml:"access_key"`
 	SecretKey string `toml:"secret_key"`
 	Insecure  bool   `toml:"insecure"`
+}
+
+func init() {
+	level := new(slog.LevelVar)
+
+	// NORTHSTAR_LOG_IGNORE silences everything below fatal; NORTHSTAR_LOG_DEBUG
+	// enables debug output. Default is info.
+	if _, ok := os.LookupEnv("NORTHSTAR_LOG_IGNORE"); ok {
+		level.Set(slog.LevelError + 4)
+	}
+
+	if _, ok := os.LookupEnv("NORTHSTAR_LOG_DEBUG"); ok {
+		level.Set(slog.LevelDebug)
+	}
+
+	telemetry.SetDefaultJSONLogger(level)
 }
 
 // newS3Session builds an AWS session from explicit S3Config — no global state,
