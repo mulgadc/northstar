@@ -45,7 +45,7 @@ func NewServer(cfg config.ServerConfig) (*Server, error) {
 	return &Server{
 		cfg:     cfg,
 		zoneDB:  zoneDB,
-		handler: &backend.Handler{Conf: zoneDB, Upstream: upstream},
+		handler: backend.NewHandler(zoneDB, upstream),
 	}, nil
 }
 
@@ -159,14 +159,14 @@ func (s *Server) listenUDPTCP(addr string) error {
 	if err != nil {
 		return fmt.Errorf("bind udp %s: %w", addr, err)
 	}
-	udp := &dns.Server{PacketConn: pc, Handler: s.handler}
+	udp := &dns.Server{PacketConn: pc, Handler: &taggedHandler{inner: s.handler, transport: "udp"}}
 
 	l, err := net.Listen("tcp", addr)
 	if err != nil {
 		_ = pc.Close()
 		return fmt.Errorf("bind tcp %s: %w", addr, err)
 	}
-	tcp := &dns.Server{Listener: l, Handler: s.handler}
+	tcp := &dns.Server{Listener: l, Handler: &taggedHandler{inner: s.handler, transport: "tcp"}}
 
 	s.track(udp, tcp)
 	s.serve(udp, "udp", addr)
@@ -192,7 +192,7 @@ func (s *Server) listenDoT() error {
 		return fmt.Errorf("bind dot %s: %w", s.cfg.DotListen, err)
 	}
 
-	dot := &dns.Server{Listener: l, Net: "tcp-tls", Handler: s.handler}
+	dot := &dns.Server{Listener: l, Net: "tcp-tls", Handler: &taggedHandler{inner: s.handler, transport: "tcp-tls"}}
 	s.track(dot)
 	s.serve(dot, "tcp-tls", s.cfg.DotListen)
 	return nil

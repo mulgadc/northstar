@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 )
 
 const (
@@ -89,8 +91,12 @@ func (s *Server) serveDoH(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Continue an inbound trace when the DoH client sent a traceparent header;
+	// UDP/TCP/DoT queries have no such wire-level context and root a new trace.
+	ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+
 	dw := &dohResponseWriter{remote: r.RemoteAddr}
-	s.handler.ServeDNS(dw, req)
+	s.handler.ServeDNSContext(ctx, dw, req)
 	if dw.msg == nil {
 		http.Error(w, "no response", http.StatusInternalServerError)
 		return
@@ -136,6 +142,7 @@ func (d *dohResponseWriter) Write(b []byte) (int, error) {
 	d.msg = m
 	return len(b), nil
 }
+func (d *dohResponseWriter) Transport() string   { return "doh" }
 func (d *dohResponseWriter) Close() error        { return nil }
 func (d *dohResponseWriter) TsigStatus() error   { return nil }
 func (d *dohResponseWriter) TsigTimersOnly(bool) {}
