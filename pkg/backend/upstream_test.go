@@ -61,7 +61,7 @@ func TestUpstreamExchange(t *testing.T) {
 
 	m := new(dns.Msg)
 	m.SetQuestion("example.org.", dns.TypeA)
-	resp, err := u.Exchange(m)
+	resp, err := u.Exchange(t.Context(), m)
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	require.NotEmpty(t, resp.Answer)
@@ -73,7 +73,7 @@ func TestUpstreamExchange(t *testing.T) {
 func TestUpstreamExchangeNoServers(t *testing.T) {
 	m := new(dns.Msg)
 	m.SetQuestion("example.org.", dns.TypeA)
-	_, err := backend.NewUpstream(nil).Exchange(m)
+	_, err := backend.NewUpstream(nil).Exchange(t.Context(), m)
 	require.Error(t, err)
 }
 
@@ -84,7 +84,7 @@ func TestUpstreamExchangeFailover(t *testing.T) {
 
 	m := new(dns.Msg)
 	m.SetQuestion("example.org.", dns.TypeA)
-	resp, err := u.Exchange(m)
+	resp, err := u.Exchange(t.Context(), m)
 	require.NoError(t, err)
 	require.NotEmpty(t, resp.Answer)
 }
@@ -93,7 +93,7 @@ func TestUpstreamResolve(t *testing.T) {
 	addr := startFakeUpstream(t, "example.org", "203.0.113.7")
 	u := backend.NewUpstream(backend.ParseUpstreamServers([]string{addr}))
 
-	rrs, err := u.Resolve("example.org", dns.TypeA)
+	rrs, err := u.Resolve(t.Context(), "example.org", dns.TypeA)
 	require.NoError(t, err)
 	require.NotEmpty(t, rrs)
 	a, ok := rrs[0].(*dns.A)
@@ -103,6 +103,6 @@ func TestUpstreamResolve(t *testing.T) {
 
 func TestUpstreamResolveAllFail(t *testing.T) {
 	u := backend.NewUpstream(backend.ParseUpstreamServers([]string{"127.0.0.1:1"}))
-	_, err := u.Resolve("example.org", dns.TypeA)
+	_, err := u.Resolve(t.Context(), "example.org", dns.TypeA)
 	require.Error(t, err)
 }

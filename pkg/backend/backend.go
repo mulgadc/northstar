@@ -1,27 +1,98 @@
 package backend
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/miekg/dns"
 	"github.com/mulgadc/northstar/pkg/config"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 )
 
 type Handler struct {
 	Conf     *config.Config
 	Upstream *Upstream
+	inst     *instruments
 }
 
+// NewHandler constructs a Handler wired for OTel metrics/traces bound to the
+// current global meter/tracer (see pkg/telemetry.Init), and threads the same
+// instruments into upstream so forwarder spans/metrics share one tracer.
+func NewHandler(conf *config.Config, upstream *Upstream) *Handler {
+	inst := newInstruments()
+	if upstream != nil {
+		upstream.inst = inst
+	}
+	return &Handler{Conf: conf, Upstream: upstream, inst: inst}
+}
+
+// ServeDNS implements dns.Handler for the UDP/TCP/DoT listeners, which pass no
+// context, so each query roots a new trace here. DoH instead calls
+// ServeDNSContext directly with a context extracted from inbound HTTP headers.
 func (h *Handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
+	h.ServeDNSContext(context.Background(), w, r)
+}
+
+// ServeDNSContext handles one query given a caller-supplied context. It starts
+// the query span and timer, delegates to serve for response construction,
+// writes the reply, then records metrics and span attributes from the final
+// response — the single place the outcome of all of ServeDNS's ~10 return
+// points is observed.
+func (h *Handler) ServeDNSContext(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) {
+	start := time.Now()
+	ctx, span := h.inst.tracerOrGlobal().Start(ctx, "dns.query")
+	defer span.End()
+
+	transport := transportFromWriter(w)
+
+	resp := h.serve(ctx, w, r)
+	writeResponse(w, resp)
+
+	elapsed := time.Since(start)
+	rcode := resp.Rcode
+	outcome := outcomeAttr(rcode)
+
+	countAttrs := []attribute.KeyValue{rcodeAttr(rcode), attribute.String("transport", transport), outcome, attribute.Bool("authoritative", resp.Authoritative)}
+	durationAttrs := []attribute.KeyValue{attribute.String("transport", transport), outcome}
+
+	span.SetAttributes(
+		attribute.String("network.transport", transport),
+		attribute.Int("dns.response.rcode", rcode),
+		attribute.Bool("dns.authoritative", resp.Authoritative),
+		attribute.Int("dns.answer.count", len(resp.Answer)),
+	)
+	if len(r.Question) > 0 {
+		q := r.Question[0]
+		countAttrs = append(countAttrs, qtypeAttr(q.Qtype))
+		durationAttrs = append(durationAttrs, qtypeAttr(q.Qtype))
+		span.SetAttributes(
+			attribute.String("dns.question.name", q.Name),
+			attribute.String("dns.question.type", dns.TypeToString[q.Qtype]),
+			attribute.String("dns.question.class", dns.ClassToString[q.Qclass]),
+		)
+	}
+	if rcode == dns.RcodeServerFailure {
+		span.SetStatus(codes.Error, dns.RcodeToString[rcode])
+	}
+
+	h.inst.recordQuery(ctx, countAttrs, durationAttrs, elapsed)
+}
+
+// serve builds the response for one query and returns the message to write.
+// ServeDNSContext writes the reply and records metrics/span attrs from the
+// result, so every return point here returns the final *dns.Msg instead of
+// writing directly.
+func (h *Handler) serve(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) *dns.Msg {
 	msg := dns.Msg{}
 	msg.SetReply(r)
 
 	if len(r.Question) == 0 {
-		writeResponse(w, &msg)
-		return
+		return &msg
 	}
 
 	domain := msg.Question[0].Name
@@ -70,8 +141,7 @@ func (h *Handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 			if qtype == dns.TypeSOA {
 				msg.Authoritative = true
 				msg.Answer = []dns.RR{h.SOA(domain, zone)}
-				writeResponse(w, &msg)
-				return
+				return &msg
 			}
 			// We are authoritative: check if name exists with other types (NODATA vs NXDOMAIN)
 			if h.Conf.NameExists(domain) {
@@ -87,7 +157,7 @@ func (h *Handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 			// Not our zone → recurse to the configured upstream forwarders.
 			// With no forwarders configured we refuse (air-gap safe).
 			if h.Upstream != nil && h.Upstream.HasServers() {
-				if resp, err := h.Upstream.Exchange(r); err == nil && resp != nil {
+				if resp, err := h.Upstream.Exchange(ctx, r); err == nil && resp != nil {
 					resp.Id = r.Id
 					// Over UDP, trim to the client's advertised buffer; if the
 					// full answer doesn't fit, Truncate sets TC so the client
@@ -95,8 +165,7 @@ func (h *Handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 					if isUDP(w) {
 						resp.Truncate(int(clientBufSize))
 					}
-					writeResponse(w, resp)
-					return
+					return resp
 				}
 				slog.Debug("recursion failed", "domain", domain)
 				msg.SetRcode(r, dns.RcodeServerFailure)
@@ -104,8 +173,7 @@ func (h *Handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 				msg.SetRcode(r, dns.RcodeRefused)
 			}
 		}
-		writeResponse(w, &msg)
-		return
+		return &msg
 	}
 
 	// We have records — build response
@@ -138,7 +206,7 @@ func (h *Handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 					Target: record.Address,
 				})
 
-				lookupRecords, err := h.Upstream.Resolve(record.Address, dns.TypeA)
+				lookupRecords, err := h.Upstream.Resolve(ctx, record.Address, dns.TypeA)
 				if err == nil {
 					for _, rr := range lookupRecords {
 						if t, ok := rr.(*dns.A); ok {
@@ -253,7 +321,7 @@ func (h *Handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 		}
 	}
 
-	writeResponse(w, &msg)
+	return &msg
 }
 
 func (h *Handler) lookupExtra(address string, qtype uint16, qclass uint16) []dns.RR {

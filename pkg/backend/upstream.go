@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"log/slog"
@@ -8,12 +9,20 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Upstream handles DNS resolution against configurable upstream servers
 // with support for both plaintext and TLS (DoT) connections.
 type Upstream struct {
 	Servers []UpstreamServer
+
+	// inst is wired in by backend.NewHandler so upstream spans/metrics share
+	// the Handler's tracer/meter. A nil inst (Upstream built via NewUpstream
+	// directly, as in tests) means no-op spans/metrics.
+	inst *instruments
 }
 
 type UpstreamServer struct {
@@ -113,10 +122,43 @@ func withUpstreamEDNS(m *dns.Msg) {
 	m.SetEdns0(upstreamUDPBufSize, false)
 }
 
+// exchangeAndRecord runs exchangeServer for one upstream server wrapped in a
+// child span and the upstream forwards/duration metrics. spanName
+// distinguishes the full-query forwarder path (dns.upstream.exchange) from
+// the CNAME-chase resolver path (dns.upstream.resolve).
+func (u *Upstream) exchangeAndRecord(ctx context.Context, spanName string, server UpstreamServer, m *dns.Msg) (*dns.Msg, error) {
+	ctx, span := u.inst.tracerOrGlobal().Start(ctx, spanName, trace.WithAttributes(attribute.String("server", server.Address)))
+	defer span.End()
+
+	start := time.Now()
+	in, err := exchangeServer(server, m)
+	elapsed := time.Since(start)
+
+	outcome := "success"
+	switch {
+	case err != nil:
+		outcome = "failure"
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	case in != nil:
+		span.SetAttributes(attribute.String("rcode", dns.RcodeToString[in.Rcode]))
+		if in.Rcode != dns.RcodeSuccess {
+			outcome = "failure"
+		}
+	}
+
+	u.inst.recordUpstream(ctx, []attribute.KeyValue{
+		attribute.String("server", server.Address),
+		attribute.String("outcome", outcome),
+	}, elapsed)
+
+	return in, err
+}
+
 // Exchange forwards a complete query to the upstream servers with failover and
 // returns the first successful response. Used to recurse non-authoritative
 // names to the configured forwarders.
-func (u *Upstream) Exchange(r *dns.Msg) (*dns.Msg, error) {
+func (u *Upstream) Exchange(ctx context.Context, r *dns.Msg) (*dns.Msg, error) {
 	if len(u.Servers) == 0 {
 		return nil, errors.New("no upstream servers configured")
 	}
@@ -127,7 +169,7 @@ func (u *Upstream) Exchange(r *dns.Msg) (*dns.Msg, error) {
 
 	var lastErr error
 	for _, server := range u.Servers {
-		in, err := exchangeServer(server, m)
+		in, err := u.exchangeAndRecord(ctx, "dns.upstream.exchange", server, m)
 		if err != nil {
 			slog.Debug("upstream failed", "server", server.Address, "error", err)
 			lastErr = err
@@ -145,7 +187,7 @@ func (u *Upstream) Exchange(r *dns.Msg) (*dns.Msg, error) {
 }
 
 // Resolve performs a DNS lookup against upstream servers with failover.
-func (u *Upstream) Resolve(name string, qtype uint16) ([]dns.RR, error) {
+func (u *Upstream) Resolve(ctx context.Context, name string, qtype uint16) ([]dns.RR, error) {
 	m := new(dns.Msg)
 	m.Id = dns.Id()
 	m.RecursionDesired = true
@@ -155,7 +197,7 @@ func (u *Upstream) Resolve(name string, qtype uint16) ([]dns.RR, error) {
 	var lastErr error
 
 	for _, server := range u.Servers {
-		in, err := exchangeServer(server, m)
+		in, err := u.exchangeAndRecord(ctx, "dns.upstream.resolve", server, m)
 		if err != nil {
 			slog.Debug("upstream failed", "server", server.Address, "error", err)
 			lastErr = err
