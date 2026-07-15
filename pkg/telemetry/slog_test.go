@@ -192,7 +192,7 @@ func TestSetDefaultJSONLoggerBridgesWithoutClobbering(t *testing.T) {
 		}
 		attrs := map[string]string{}
 		for _, kv := range rec.Resource().Attributes() {
-			attrs[string(kv.Key)] = kv.Value.Emit()
+			attrs[string(kv.Key)] = kv.Value.String()
 		}
 		if attrs["service.name"] != "northstar" {
 			t.Errorf("record %d resource service.name = %q, want northstar", i, attrs["service.name"])

@@ -89,7 +89,7 @@ func attrMapOfSum(t *testing.T, m *metricdata.Metrics) map[string]string {
 	require.Len(t, sum.DataPoints, 1, "metric %s data points", m.Name)
 	got := map[string]string{}
 	for _, kv := range sum.DataPoints[0].Attributes.ToSlice() {
-		got[string(kv.Key)] = kv.Value.Emit()
+		got[string(kv.Key)] = kv.Value.String()
 	}
 	return got
 }
@@ -148,7 +148,7 @@ func TestServeDNSRecordsQueryMetricAndSpan(t *testing.T) {
 
 	spanAttrs := map[string]string{}
 	for _, kv := range spans[0].Attributes() {
-		spanAttrs[string(kv.Key)] = kv.Value.Emit()
+		spanAttrs[string(kv.Key)] = kv.Value.String()
 	}
 	assert.Equal(t, "example.test.", spanAttrs["dns.question.name"])
 	assert.Equal(t, "A", spanAttrs["dns.question.type"])
