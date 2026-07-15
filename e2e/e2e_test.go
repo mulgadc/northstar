@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"fmt"
 	"net/http"
@@ -10,24 +11,23 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/miekg/dns"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 const (
-	northstarUDP  = "127.0.0.1:5553"
-	northstarTCP  = "127.0.0.1:5553"
-	northstarDoT  = "127.0.0.1:8853"
-	predastore  = "https://127.0.0.1:9443"
-	bucketName  = "dns-zones"
-	accessKey   = "AKIAIOSFODNN7EXAMPLE"
-	secretKey   = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-	awsRegion   = "us-east-1"
+	northstarUDP = "127.0.0.1:5553"
+	northstarTCP = "127.0.0.1:5553"
+	northstarDoT = "127.0.0.1:8853"
+	predastore   = "https://127.0.0.1:9443"
+	bucketName   = "dns-zones"
+	accessKey    = "AKIAIOSFODNN7EXAMPLE"
+	secretKey    = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+	awsRegion    = "us-east-1"
 )
 
 func TestMain(m *testing.M) {
@@ -52,19 +52,19 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func s3Client() *s3.S3 {
-	sess := session.Must(session.NewSession(&aws.Config{
-		Region:           aws.String(awsRegion),
-		Endpoint:         aws.String(predastore),
-		S3ForcePathStyle: aws.Bool(true),
-		Credentials:      credentials.NewStaticCredentials(accessKey, secretKey, ""),
+func s3Client() *s3.Client {
+	return s3.New(s3.Options{
+		Region:       awsRegion,
+		BaseEndpoint: aws.String(predastore),
+		UsePathStyle: true,
+		Credentials:  credentials.NewStaticCredentialsProvider(accessKey, secretKey, ""),
 		HTTPClient: &http.Client{
 			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+				// predastore serves a self-signed cert in the compose stack.
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // G402: test-only client against the local compose stack
 			},
 		},
-	}))
-	return s3.New(sess)
+	})
 }
 
 func uploadZoneFiles() error {
@@ -75,7 +75,7 @@ func uploadZoneFiles() error {
 		return fmt.Errorf("reading zone file: %w", err)
 	}
 
-	_, err = svc.PutObject(&s3.PutObjectInput{
+	_, err = svc.PutObject(context.Background(), &s3.PutObjectInput{
 		Bucket: aws.String(bucketName),
 		Key:    aws.String("e2etest.net.toml"),
 		Body:   bytes.NewReader(zoneFile),
@@ -361,7 +361,7 @@ address = "10.20.30.200"
 domain = "www."
 address = "10.20.30.201"
 `
-	_, err := svc.PutObject(&s3.PutObjectInput{
+	_, err := svc.PutObject(t.Context(), &s3.PutObjectInput{
 		Bucket: aws.String(bucketName),
 		Key:    aws.String("e2etest.net.toml"),
 		Body:   bytes.NewReader([]byte(updatedZone)),
