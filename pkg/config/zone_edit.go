@@ -1,13 +1,14 @@
 package config
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -142,8 +143,8 @@ func ReadZoneRaw(s3cfg *S3Config, domain string) (ConfigArr, bool, error) {
 		return cfg, false, errors.New("s3 config with bucket required")
 	}
 
-	svc := s3.New(newS3Session(s3cfg))
-	out, err := svc.GetObject(&s3.GetObjectInput{
+	svc := newS3Client(s3cfg)
+	out, err := svc.GetObject(context.TODO(), &s3.GetObjectInput{
 		Bucket: aws.String(s3cfg.Bucket),
 		Key:    aws.String(domain + ".toml"),
 	})

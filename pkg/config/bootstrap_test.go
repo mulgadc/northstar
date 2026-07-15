@@ -12,8 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws/awserr"
-	"github.com/aws/aws-sdk-go/service/s3"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -142,15 +144,26 @@ func TestEnsureBaseZoneCreatesThenIdempotent(t *testing.T) {
 	assert.Equal(t, original, objects["spx3.net.toml"])
 }
 
+// responseError wraps err in the transport shape the v2 client returns, pairing
+// the modelled error with the HTTP status it arrived on.
+func responseError(status int, err error) error {
+	return &awshttp.ResponseError{
+		ResponseError: &smithyhttp.ResponseError{
+			Response: &smithyhttp.Response{Response: &http.Response{StatusCode: status}},
+			Err:      err,
+		},
+	}
+}
+
 func TestIsNotFound(t *testing.T) {
-	assert.True(t, isNotFound(awserr.New(s3.ErrCodeNoSuchKey, "no such key", nil)))
-	assert.True(t, isNotFound(awserr.New("NotFound", "not found", nil)))
-	assert.True(t, isNotFound(awserr.NewRequestFailure(awserr.New("Whatever", "gone", nil), 404, "req")))
+	assert.True(t, isNotFound(&types.NoSuchKey{}))
+	assert.True(t, isNotFound(&types.NotFound{}))
+	assert.True(t, isNotFound(responseError(404, &smithy.GenericAPIError{Code: "Whatever", Message: "gone"})))
 	// A missing bucket is a misprovisioned store, never a missing object —
 	// even when the backend wraps it in an HTTP 404.
-	assert.False(t, isNotFound(awserr.New(s3.ErrCodeNoSuchBucket, "no such bucket", nil)))
-	assert.False(t, isNotFound(awserr.NewRequestFailure(awserr.New(s3.ErrCodeNoSuchBucket, "no such bucket", nil), 404, "req")))
-	assert.False(t, isNotFound(awserr.NewRequestFailure(awserr.New("AccessDenied", "denied", nil), 403, "req")))
+	assert.False(t, isNotFound(&types.NoSuchBucket{}))
+	assert.False(t, isNotFound(responseError(404, &types.NoSuchBucket{})))
+	assert.False(t, isNotFound(responseError(403, &smithy.GenericAPIError{Code: "AccessDenied", Message: "denied"})))
 	assert.False(t, isNotFound(io.EOF))
 }
 
