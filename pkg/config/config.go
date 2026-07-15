@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -104,6 +105,18 @@ func init() {
 	telemetry.SetDefaultJSONLogger(level)
 }
 
+// endpointSchemeRE matches a leading URI scheme.
+var endpointSchemeRE = regexp.MustCompile(`^[^:]+://`)
+
+// normalizeEndpoint defaults schemeless S3 endpoints to HTTPS. SDK v1 accepted
+// bare host values, while SDK v2 requires BaseEndpoint to be an absolute URI.
+func normalizeEndpoint(endpoint string) string {
+	if endpointSchemeRE.MatchString(endpoint) {
+		return endpoint
+	}
+	return "https://" + endpoint
+}
+
 // newS3Client builds an S3 client from explicit S3Config — no global state, no
 // environment lookups. Options are set directly rather than resolved through
 // config.LoadDefaultConfig, which would read AWS_* env vars and ~/.aws/config.
@@ -113,7 +126,7 @@ func newS3Client(cfg *S3Config) *s3.Client {
 	// A custom endpoint is an S3-compatible backend (e.g. predastore), which
 	// serves path-style rather than virtual-host addressing.
 	if cfg.Endpoint != "" {
-		opts.BaseEndpoint = aws.String(cfg.Endpoint)
+		opts.BaseEndpoint = aws.String(normalizeEndpoint(cfg.Endpoint))
 		opts.UsePathStyle = true
 	}
 
