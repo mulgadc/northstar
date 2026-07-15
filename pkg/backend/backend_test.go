@@ -420,7 +420,7 @@ func TestMXRecord(t *testing.T) {
 		}
 	}
 
-	assert.Equal(t, 4, len(mx))
+	assert.Len(t, mx, 4)
 	if len(mx) > 0 {
 		assert.Equal(t, "host-10.hello_a.net.", mx[0])
 	}
@@ -451,7 +451,7 @@ func TestNSRecord(t *testing.T) {
 		}
 	}
 
-	assert.Equal(t, 2, len(nsRecords))
+	assert.Len(t, nsRecords, 2)
 	assert.Contains(t, nsRecords, "ns1.hello_a.net.")
 	assert.Contains(t, nsRecords, "ns2.hello_a.net.")
 }
@@ -494,7 +494,7 @@ func TestTXTRecord(t *testing.T) {
 		}
 	}
 
-	assert.Equal(t, 2, len(txt))
+	assert.Len(t, txt, 2)
 
 	spfok := strings.HasPrefix(txt[0], "v=spf1 ip:203")
 	assert.True(t, spfok)
@@ -521,7 +521,7 @@ func TestSOARecord(t *testing.T) {
 	assert.Equal(t, "ns1.hello_a.net.", soa.Ns)
 	assert.Contains(t, soa.Mbox, "hostmaster.")
 	// Serial should be based on Modified timestamp (2022-05-27), not time.Now()
-	assert.Greater(t, soa.Serial, uint32(0))
+	assert.Positive(t, soa.Serial)
 }
 
 // --- SRV Record Tests ---
@@ -542,7 +542,7 @@ func TestSRVRecord(t *testing.T) {
 		}
 	}
 
-	assert.Equal(t, 2, len(srvRecords))
+	assert.Len(t, srvRecords, 2)
 
 	if len(srvRecords) >= 2 {
 		assert.Equal(t, uint16(10), srvRecords[0].Priority)
@@ -573,7 +573,7 @@ func TestCAARecord(t *testing.T) {
 		}
 	}
 
-	assert.Equal(t, 2, len(caaRecords))
+	assert.Len(t, caaRecords, 2)
 	if len(caaRecords) >= 2 {
 		assert.Equal(t, "issue", caaRecords[0].Tag)
 		assert.Equal(t, "letsencrypt.org", caaRecords[0].Value)
@@ -784,7 +784,7 @@ func TestAllDomains(t *testing.T) {
 				mx = append(mx, key.Mx)
 			}
 		}
-		assert.Equal(t, 4, len(mx))
+		assert.Len(t, mx, 4)
 
 		// Test TXT
 		m.SetQuestion(dns.Fqdn(fmt.Sprintf("hello_%c.net", i)), dns.TypeTXT)
@@ -798,7 +798,7 @@ func TestAllDomains(t *testing.T) {
 				txt = append(txt, key.Txt[0])
 			}
 		}
-		assert.Equal(t, 2, len(txt))
+		assert.Len(t, txt, 2)
 
 		iprange++
 	}

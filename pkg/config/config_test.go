@@ -13,11 +13,11 @@ import (
 func TestDomainLookup(t *testing.T) {
 	conf := GenerateTestDomains(1000)
 
-	assert.Equal(t, 1000, len(conf.Domain))
+	assert.Len(t, conf.Domain, 1000)
 
 	for i := range 1000 {
 		lookup := DomainLookup{Domain: fmt.Sprintf("test%d.net", i), Type: 1, Class: 1}
-		assert.Equal(t, 4, len(conf.Records[lookup]))
+		assert.Len(t, conf.Records[lookup], 4)
 
 		for i2 := 1; i2 < 5; i2++ {
 			if len(conf.Records[lookup]) == 4 {
@@ -29,8 +29,8 @@ func TestDomainLookup(t *testing.T) {
 	// Test delete
 	conf.DeleteZone("test1.net")
 	lookup := DomainLookup{Domain: "test1.net", Type: 1, Class: 1}
-	assert.Equal(t, 0, len(conf.Records[lookup]))
-	assert.Equal(t, "", conf.Domain["test1.net"].Domain)
+	assert.Empty(t, conf.Records[lookup])
+	assert.Empty(t, conf.Domain["test1.net"].Domain)
 }
 
 func TestConfigGood(t *testing.T) {
@@ -124,8 +124,8 @@ domain = "www."
 	toml.Unmarshal([]byte(file), &config)
 	ApplyDefaults(&config, time.Now())
 
-	assert.Equal(t, "", config.Domain.Domain)
-	assert.Equal(t, 0, len(config.Records))
+	assert.Empty(t, config.Domain.Domain)
+	assert.Empty(t, config.Records)
 }
 
 func TestConfigSRV(t *testing.T) {
@@ -160,7 +160,7 @@ address = "node1.srvtest.net."
 	ApplyDefaults(&config, time.Now())
 
 	assert.Equal(t, "srvtest.net", config.Domain.Domain)
-	require.Equal(t, 1, len(config.Records))
+	require.Len(t, config.Records, 1)
 	assert.Equal(t, uint16(33), config.Records[0].Type)
 	assert.Equal(t, uint16(10), config.Records[0].Priority)
 	assert.Equal(t, uint16(5), config.Records[0].Weight)
@@ -198,7 +198,7 @@ address = "letsencrypt.org"
 	require.NoError(t, err)
 	ApplyDefaults(&config, time.Now())
 
-	require.Equal(t, 1, len(config.Records))
+	require.Len(t, config.Records, 1)
 	assert.Equal(t, uint16(257), config.Records[0].Type)
 	assert.Equal(t, uint8(0), config.Records[0].CAAFlag)
 	assert.Equal(t, "issue", config.Records[0].CAATag)
@@ -280,7 +280,7 @@ func TestAddDeleteZoneConcurrent(t *testing.T) {
 		<-done
 	}
 
-	assert.Equal(t, 100, len(conf.Domain))
+	assert.Len(t, conf.Domain, 100)
 
 	// Delete zones concurrently
 	for i := range 100 {
@@ -294,7 +294,7 @@ func TestAddDeleteZoneConcurrent(t *testing.T) {
 		<-done
 	}
 
-	assert.Equal(t, 0, len(conf.Domain))
+	assert.Empty(t, conf.Domain)
 }
 
 func TestCheckConfigDomainMatch(t *testing.T) {
