@@ -17,7 +17,7 @@ import (
 )
 
 // Version is set via ldflags at build time.
-// Example: go build -ldflags "-X main.Version=v1.0.0"
+// Example: go build -ldflags "-X main.Version=v1.0.0".
 var Version = "dev"
 
 func main() {

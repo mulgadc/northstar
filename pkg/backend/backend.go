@@ -409,7 +409,7 @@ func (h *Handler) SOA(domain string, zone string) dns.RR {
 }
 
 // wildcardFor returns the wildcard name for a given domain under a zone.
-// e.g., "foo.bar.example.com." under zone "example.com" → "*.example.com."
+// e.g., "foo.bar.example.com." under zone "example.com" → "*.example.com.".
 func wildcardFor(name string, zone string) string {
 	zoneFQDN := zone + "."
 	if !strings.HasSuffix(name, zoneFQDN) {
