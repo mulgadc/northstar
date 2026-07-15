@@ -5,19 +5,19 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/s3"
-	"github.com/aws/aws-sdk-go/service/s3/s3manager"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/fsnotify/fsnotify"
 	"github.com/mulgadc/northstar/pkg/telemetry"
 	"github.com/pelletier/go-toml/v2"
@@ -105,33 +105,44 @@ func init() {
 	telemetry.SetDefaultJSONLogger(level)
 }
 
-// newS3Session builds an AWS session from explicit S3Config — no global state,
-// no environment lookups.
-func newS3Session(cfg *S3Config) *session.Session {
-	awsCfg := aws.Config{}
+// endpointSchemeRE matches a leading URI scheme.
+var endpointSchemeRE = regexp.MustCompile(`^[^:]+://`)
 
-	if cfg.Region != "" {
-		awsCfg.Region = aws.String(cfg.Region)
+// normalizeEndpoint defaults schemeless S3 endpoints to HTTPS. SDK v1 accepted
+// bare host values, while SDK v2 requires BaseEndpoint to be an absolute URI.
+func normalizeEndpoint(endpoint string) string {
+	if endpointSchemeRE.MatchString(endpoint) {
+		return endpoint
 	}
+	return "https://" + endpoint
+}
 
+// newS3Client builds an S3 client from explicit S3Config — no global state, no
+// environment lookups. Options are set directly rather than resolved through
+// config.LoadDefaultConfig, which would read AWS_* env vars and ~/.aws/config.
+func newS3Client(cfg *S3Config) *s3.Client {
+	opts := s3.Options{Region: cfg.Region}
+
+	// A custom endpoint is an S3-compatible backend (e.g. predastore), which
+	// serves path-style rather than virtual-host addressing.
 	if cfg.Endpoint != "" {
-		awsCfg.Endpoint = aws.String(cfg.Endpoint)
-		awsCfg.S3ForcePathStyle = aws.Bool(true)
+		opts.BaseEndpoint = aws.String(normalizeEndpoint(cfg.Endpoint))
+		opts.UsePathStyle = true
 	}
 
 	if cfg.AccessKey != "" && cfg.SecretKey != "" {
-		awsCfg.Credentials = credentials.NewStaticCredentials(cfg.AccessKey, cfg.SecretKey, "")
+		opts.Credentials = credentials.NewStaticCredentialsProvider(cfg.AccessKey, cfg.SecretKey, "")
 	}
 
 	if cfg.Insecure {
-		awsCfg.HTTPClient = &http.Client{
+		opts.HTTPClient = &http.Client{
 			Transport: &http.Transport{
 				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // G402: opt-in via S3Config.Insecure for self-signed S3 endpoints
 			},
 		}
 	}
 
-	return session.Must(session.NewSession(&awsCfg))
+	return s3.New(opts)
 }
 
 // FindZone walks up the domain labels to find which zone we are authoritative for.
@@ -208,8 +219,7 @@ func (config *Config) MonitorConfig(ctx context.Context, zone_dir string, s3cfg 
 			return
 		}
 
-		sess := newS3Session(s3cfg)
-		svc := s3.New(sess)
+		svc := newS3Client(s3cfg)
 
 		ticker := time.NewTicker(syncInterval)
 		defer ticker.Stop()
@@ -230,7 +240,7 @@ func (config *Config) MonitorConfig(ctx context.Context, zone_dir string, s3cfg 
 				return
 			}
 
-			resp, err := svc.ListObjectsV2(&s3.ListObjectsV2Input{Bucket: aws.String(path[1])})
+			resp, err := svc.ListObjectsV2(ctx, &s3.ListObjectsV2Input{Bucket: aws.String(path[1])})
 
 			if err != nil {
 				slog.Warn("MonitorConfig: unable to list bucket", "bucket", path[1], "error", err)
@@ -441,8 +451,7 @@ func ReadZoneFiles(zone_dir string, s3cfg *S3Config) (*Config, error) {
 			return nil, fmt.Errorf("s3:// zone_dir %q requires S3 config", zone_dir)
 		}
 
-		sess := newS3Session(s3cfg)
-		svc := s3.New(sess)
+		svc := newS3Client(s3cfg)
 
 		path := strings.Split(zone_dir, "s3://")
 
@@ -450,7 +459,7 @@ func ReadZoneFiles(zone_dir string, s3cfg *S3Config) (*Config, error) {
 			return nil, fmt.Errorf("invalid s3:// zone_dir %q", zone_dir)
 		}
 
-		resp, err := svc.ListObjectsV2(&s3.ListObjectsV2Input{Bucket: aws.String(path[1])})
+		resp, err := svc.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{Bucket: aws.String(path[1])})
 		if err != nil {
 			return nil, fmt.Errorf("list bucket %s: %w", path[1], err)
 		}
@@ -577,26 +586,28 @@ func ReadZone(zone_file string, lastModified time.Time, s3cfg *S3Config) (myconf
 			return myconfig, errors.New("path not found in S3")
 		}
 
-		sess := newS3Session(s3cfg)
+		svc := newS3Client(s3cfg)
 
-		buff := &aws.WriteAtBuffer{}
-		downloader := s3manager.NewDownloader(sess)
-
-		numBytes, err := downloader.Download(buff,
-			&s3.GetObjectInput{
-				Bucket: aws.String(paths[0]),
-				Key:    aws.String(paths[1]),
-			})
+		out, err := svc.GetObject(context.TODO(), &s3.GetObjectInput{
+			Bucket: aws.String(paths[0]),
+			Key:    aws.String(paths[1]),
+		})
 
 		if err != nil {
 			return myconfig, fmt.Errorf("download %s: %w", zone_file, err)
 		}
+		defer func() { _ = out.Body.Close() }()
 
-		if numBytes == 0 {
+		body, err := io.ReadAll(out.Body)
+		if err != nil {
+			return myconfig, fmt.Errorf("read %s: %w", zone_file, err)
+		}
+
+		if len(body) == 0 {
 			return myconfig, errors.New("config file empty")
 		}
 
-		if err := toml.Unmarshal(buff.Bytes(), &myconfig); err != nil {
+		if err := toml.Unmarshal(body, &myconfig); err != nil {
 			return myconfig, err
 		}
 		ApplyDefaults(&myconfig, lastModified)

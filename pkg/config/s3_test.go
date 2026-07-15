@@ -58,6 +58,41 @@ func fakeS3(t *testing.T, bucket string, objects map[string]string) *S3Config {
 	}
 }
 
+func TestNormalizeEndpoint(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "bare host port gets HTTPS",
+			in:   "192.168.1.29:8443",
+			want: "https://192.168.1.29:8443",
+		},
+		{
+			name: "HTTPS URL unchanged",
+			in:   "https://127.0.0.1:8443",
+			want: "https://127.0.0.1:8443",
+		},
+		{
+			name: "HTTP URL unchanged",
+			in:   "http://127.0.0.1:8443",
+			want: "http://127.0.0.1:8443",
+		},
+		{
+			name: "bare hostname gets HTTPS",
+			in:   "predastore.internal",
+			want: "https://predastore.internal",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, normalizeEndpoint(tc.in))
+		})
+	}
+}
+
 func TestReadZoneS3(t *testing.T) {
 	objects := map[string]string{"example.test.toml": zoneBody("example.test", "10.0.0.1")}
 	s3cfg := fakeS3(t, "northstar", objects)

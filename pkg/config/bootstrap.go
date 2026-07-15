@@ -2,13 +2,16 @@ package config
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/awserr"
-	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
 )
 
 // NameserverSeed is one authoritative nameserver for a generated base zone: an
@@ -45,8 +48,8 @@ func ZoneExists(s3cfg *S3Config, domain string) (bool, error) {
 		return false, errors.New("s3 config with bucket required")
 	}
 
-	svc := s3.New(newS3Session(s3cfg))
-	_, err := svc.HeadObject(&s3.HeadObjectInput{
+	svc := newS3Client(s3cfg)
+	_, err := svc.HeadObject(context.TODO(), &s3.HeadObjectInput{
 		Bucket: aws.String(s3cfg.Bucket),
 		Key:    aws.String(domain + ".toml"),
 	})
@@ -66,8 +69,8 @@ func WriteZoneFile(s3cfg *S3Config, domain string, body []byte) error {
 		return errors.New("s3 config with bucket required")
 	}
 
-	svc := s3.New(newS3Session(s3cfg))
-	_, err := svc.PutObject(&s3.PutObjectInput{
+	svc := newS3Client(s3cfg)
+	_, err := svc.PutObject(context.TODO(), &s3.PutObjectInput{
 		Bucket:      aws.String(s3cfg.Bucket),
 		Key:         aws.String(domain + ".toml"),
 		Body:        bytes.NewReader(body),
@@ -105,17 +108,33 @@ func EnsureBaseZone(s3cfg *S3Config, seed BaseZoneSeed) (bool, error) {
 // of the various codes S3-compatible backends return for HeadObject. A missing
 // bucket (NoSuchBucket) is a misprovisioned zone store, not a missing object.
 func isNotFound(err error) bool {
-	var aerr awserr.Error
-	if errors.As(err, &aerr) {
-		switch aerr.Code() {
-		case s3.ErrCodeNoSuchBucket:
+	// Checked first so the 404 fallback below cannot reclassify a missing bucket
+	// as a missing object.
+	var noBucket *types.NoSuchBucket
+	if errors.As(err, &noBucket) {
+		return false
+	}
+
+	var noKey *types.NoSuchKey
+	var notFound *types.NotFound
+	if errors.As(err, &noKey) || errors.As(err, &notFound) {
+		return true
+	}
+
+	// Backends vary in the code they return, and HeadObject has no body to carry
+	// one at all, so fall back to the error code then the status line.
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.ErrorCode() {
+		case "NoSuchBucket":
 			return false
-		case s3.ErrCodeNoSuchKey, "NotFound":
+		case "NoSuchKey", "NotFound":
 			return true
 		}
 	}
-	var rf awserr.RequestFailure
-	if errors.As(err, &rf) && rf.StatusCode() == 404 {
+
+	var respErr *awshttp.ResponseError
+	if errors.As(err, &respErr) && respErr.HTTPStatusCode() == 404 {
 		return true
 	}
 	return false
