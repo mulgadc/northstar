@@ -32,6 +32,14 @@ type ServerConfig struct {
 	ZoneDir      string         `toml:"zone_dir"`
 	S3           S3Config       `toml:"s3"`
 	Upstream     UpstreamConfig `toml:"upstream"`
+	Quotas       Quotas         `toml:"quotas"`
+}
+
+// Quotas holds per-deployment DNS service-quota overrides, mirroring the
+// [quota] block in awsgw.toml. The zero value disables quota enforcement.
+type Quotas struct {
+	Enabled              bool `toml:"enabled"`
+	RecordsPerHostedZone int  `toml:"records_per_hosted_zone"`
 }
 
 // UpstreamConfig lists forwarders for non-authoritative queries. An empty list

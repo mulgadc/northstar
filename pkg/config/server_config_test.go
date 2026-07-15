@@ -30,6 +30,10 @@ access_key = "AKIATEST"
 secret_key = "secret"
 insecure = true
 
+[quotas]
+enabled = true
+records_per_hosted_zone = 2500
+
 [upstream]
 nameservers = ["1.1.1.1:53", "tls://8.8.8.8:853"]
 `)
@@ -42,6 +46,7 @@ nameservers = ["1.1.1.1:53", "tls://8.8.8.8:853"]
 	assert.Equal(t, 15, cfg.SyncInterval)
 	assert.Equal(t, "s3://northstar", cfg.ZoneSource())
 	assert.Equal(t, []string{"1.1.1.1:53", "tls://8.8.8.8:853"}, cfg.Upstream.Nameservers)
+	assert.Equal(t, Quotas{Enabled: true, RecordsPerHostedZone: 2500}, cfg.Quotas)
 
 	s3 := cfg.S3Pointer()
 	require.NotNil(t, s3)
@@ -61,6 +66,7 @@ func TestLoadServerConfigDefaults(t *testing.T) {
 	assert.Equal(t, defaultInternalDomain, cfg.InternalDomain)
 	assert.Equal(t, "/etc/spinifex/zones", cfg.ZoneSource())
 	assert.Nil(t, cfg.S3Pointer())
+	assert.Equal(t, Quotas{}, cfg.Quotas, "an absent [quotas] block must be disabled")
 }
 
 func TestLoadServerConfigInternalAndNats(t *testing.T) {
