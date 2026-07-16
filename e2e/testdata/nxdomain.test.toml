@@ -1,0 +1,28 @@
+version = 1.0
+
+[domain]
+domain = "nxdomain.test"
+created = 2024-01-01T00:00:00Z
+modified = 2024-06-15T12:00:00Z
+soa = "ns1.nxdomain.test."
+verified = true
+active = true
+ownerid = 1
+
+[defaults]
+ttl = 300
+type = 1
+class = 1
+
+[[records]]
+domain = ""
+address = "10.20.40.1"
+
+[[records]]
+domain = ""
+type = 2
+address = "ns1.nxdomain.test."
+
+[[records]]
+domain = "ns1."
+address = "10.20.40.10"

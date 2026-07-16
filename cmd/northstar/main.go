@@ -92,6 +92,10 @@ func loadConfig(path string) (config.ServerConfig, error) {
 	zoneDir := envOr("ZONE_DIR", "config/domains/")
 	host := envOr("HOST", "0.0.0.0")
 	port := envOr("PORT", "53")
+	syncInterval, err := envIntOr("S3_SYNC_RETRY", 60)
+	if err != nil {
+		return config.ServerConfig{}, err
+	}
 
 	cfg := config.ServerConfig{
 		Listen:        fmt.Sprintf("%s:%s", host, port),
@@ -100,6 +104,7 @@ func loadConfig(path string) (config.ServerConfig, error) {
 		TLSKey:        os.Getenv("NORTHSTAR_TLS_KEY"),
 		DefaultDomain: os.Getenv("NORTHSTAR_DEFAULT_DOMAIN"),
 		ZoneDir:       zoneDir,
+		SyncInterval:  syncInterval,
 		Upstream: config.UpstreamConfig{
 			Nameservers: splitCSV(os.Getenv("NORTHSTAR_UPSTREAM")),
 		},
@@ -150,6 +155,19 @@ func envBool(key string) (bool, error) {
 		return false, fmt.Errorf("parse %s: %w", key, err)
 	}
 	return enabled, nil
+}
+
+func envIntOr(key string, fallback int) (int, error) {
+	value, ok := os.LookupEnv(key)
+	if !ok || value == "" {
+		return fallback, nil
+	}
+
+	n, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("parse %s: %w", key, err)
+	}
+	return n, nil
 }
 
 func envOr(key, def string) string {

@@ -42,11 +42,13 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
-	// Wait for northstar to sync zone files from S3
+	// Wait for northstar to sync both zone files from S3.
 	fmt.Println("Waiting for northstar to sync zone files...")
-	if err := waitForDNS(30 * time.Second); err != nil {
-		fmt.Printf("Northstar DNS not ready: %v\n", err)
-		os.Exit(1)
+	for _, domain := range []string{"e2etest.net", "nxdomain.test"} {
+		if err := waitForDNS(domain, 30*time.Second); err != nil {
+			fmt.Printf("Northstar DNS not ready: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	os.Exit(m.Run())
@@ -70,39 +72,42 @@ func s3Client() *s3.Client {
 func uploadZoneFiles() error {
 	svc := s3Client()
 
-	zoneFile, err := os.ReadFile("testdata/e2etest.net.toml")
-	if err != nil {
-		return fmt.Errorf("reading zone file: %w", err)
-	}
+	for _, name := range []string{"e2etest.net.toml", "nxdomain.test.toml"} {
+		zoneFile, err := os.ReadFile("testdata/" + name)
+		if err != nil {
+			return fmt.Errorf("reading zone file %s: %w", name, err)
+		}
 
-	_, err = svc.PutObject(context.Background(), &s3.PutObjectInput{
-		Bucket: aws.String(bucketName),
-		Key:    aws.String("e2etest.net.toml"),
-		Body:   bytes.NewReader(zoneFile),
-	})
-	if err != nil {
-		return fmt.Errorf("uploading zone file: %w", err)
-	}
+		_, err = svc.PutObject(context.Background(), &s3.PutObjectInput{
+			Bucket:      aws.String(bucketName),
+			Key:         aws.String(name),
+			Body:        bytes.NewReader(zoneFile),
+			ContentType: aws.String("application/toml"),
+		})
+		if err != nil {
+			return fmt.Errorf("uploading zone file %s: %w", name, err)
+		}
 
-	fmt.Println("Uploaded e2etest.net.toml to S3")
+		fmt.Printf("Uploaded %s to S3\n", name)
+	}
 	return nil
 }
 
-func waitForDNS(timeout time.Duration) error {
+func waitForDNS(domain string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	c := dns.Client{Timeout: 2 * time.Second}
 	m := dns.Msg{}
-	m.SetQuestion(dns.Fqdn("e2etest.net"), dns.TypeA)
+	m.SetQuestion(dns.Fqdn(domain), dns.TypeA)
 
 	for time.Now().Before(deadline) {
 		r, _, err := c.Exchange(&m, northstarUDP)
 		if err == nil && r.Rcode == dns.RcodeSuccess && len(r.Answer) > 0 {
-			fmt.Println("Northstar is ready and serving zones from S3")
+			fmt.Printf("Northstar is serving %s from S3\n", domain)
 			return nil
 		}
 		time.Sleep(1 * time.Second)
 	}
-	return fmt.Errorf("timeout waiting for DNS to become ready")
+	return fmt.Errorf("timeout waiting for DNS zone %s", domain)
 }
 
 // --- S3 Zone Loading ---
@@ -288,13 +293,22 @@ func TestE2E_EDNS0(t *testing.T) {
 func TestE2E_NXDOMAIN(t *testing.T) {
 	c := dns.Client{}
 	m := dns.Msg{}
-	m.SetQuestion(dns.Fqdn("nonexistent.e2etest.net"), dns.TypeA)
+	m.SetQuestion(dns.Fqdn("missing.nxdomain.test"), dns.TypeA)
 
 	r, _, err := c.Exchange(&m, northstarUDP)
 	require.NoError(t, err)
 	assert.Equal(t, dns.RcodeNameError, r.Rcode)
 	assert.True(t, r.Authoritative)
-	assert.NotEmpty(t, r.Ns, "Should have SOA in authority section")
+	require.NotEmpty(t, r.Ns, "response should have an authority section")
+
+	hasSOA := false
+	for _, record := range r.Ns {
+		if _, ok := record.(*dns.SOA); ok {
+			hasSOA = true
+			break
+		}
+	}
+	assert.True(t, hasSOA, "authority section should contain an SOA record")
 }
 
 // --- Wildcard ---
