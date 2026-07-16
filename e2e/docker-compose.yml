@@ -19,7 +19,7 @@ services:
       CONFIG: "/config/predastore.toml"
       TLS_CERT: "/certs/predastore.pem"
       TLS_KEY: "/certs/predastore.key"
-      SSL_CERT_FILE: "/certs/predastore.pem"
+      SSL_CERT_FILE: "/certs/ca.pem"
       ENCRYPTION_KEY_FILE: "/encryption.key"
     volumes:
       - ./testdata/predastore.toml:/config/predastore.toml:ro
@@ -43,7 +43,7 @@ services:
       AWS_SECRET_ACCESS_KEY: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
       AWS_REGION: "us-east-1"
       NORTHSTAR_S3_ENDPOINT: "https://predastore:9443"
-      NORTHSTAR_S3_INSECURE: "1"
+      SSL_CERT_FILE: "/certs/ca.pem"
       S3_SYNC_RETRY: "3"
       PORT: "5553"
       HOST: "0.0.0.0"
