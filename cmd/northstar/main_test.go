@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/mulgadc/northstar/pkg/config"
 	"github.com/stretchr/testify/require"
@@ -22,6 +23,7 @@ func TestLoadConfigS3InsecureOnlyInEnvironmentMode(t *testing.T) {
 	t.Setenv("ZONE_DIR", "s3://dns-zones")
 	t.Setenv("NORTHSTAR_S3_ENDPOINT", server.URL)
 	t.Setenv("NORTHSTAR_S3_INSECURE", "1")
+	t.Setenv("S3_SYNC_RETRY", "3")
 	t.Setenv("AWS_REGION", "us-east-1")
 	t.Setenv("AWS_ACCESS_KEY", "AKIATEST")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "secret")
@@ -29,6 +31,7 @@ func TestLoadConfigS3InsecureOnlyInEnvironmentMode(t *testing.T) {
 	cfg, err := loadConfig("")
 	require.NoError(t, err)
 	require.True(t, cfg.S3.Insecure)
+	require.Equal(t, 3*time.Second, cfg.SyncDuration())
 
 	zones, err := config.ReadZoneFiles(cfg.ZoneSource(), cfg.S3Pointer())
 	require.NoError(t, err)
@@ -48,6 +51,24 @@ insecure = true
 	cfg, err = loadConfig(path)
 	require.NoError(t, err)
 	require.False(t, cfg.S3.Insecure)
+}
+
+func TestEnvIntOr(t *testing.T) {
+	value, err := envIntOr("UNSET_TEST_INT", 60)
+	require.NoError(t, err)
+	require.Equal(t, 60, value)
+
+	t.Setenv("TEST_INT", "3")
+	value, err = envIntOr("TEST_INT", 60)
+	require.NoError(t, err)
+	require.Equal(t, 3, value)
+}
+
+func TestLoadConfigRejectsInvalidSyncInterval(t *testing.T) {
+	t.Setenv("S3_SYNC_RETRY", "invalid")
+
+	_, err := loadConfig("")
+	require.ErrorContains(t, err, "S3_SYNC_RETRY")
 }
 
 func TestEnvBool(t *testing.T) {

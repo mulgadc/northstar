@@ -88,11 +88,27 @@ govulncheck:
 # E2E tests using Docker (predastore + northstar)
 e2e:
 	@echo -e "\n....Running E2E tests...."
-	cd e2e && docker compose up -d --build
-	@echo "Waiting for services to start..."
-	sleep 5
-	cd e2e && NORTHSTAR_E2E=1 go test -v -timeout 120s ./...
-	cd e2e && docker compose down -v
+	cd e2e && \
+		cleanup() { \
+			status=$$?; \
+			trap - EXIT; \
+			set +e; \
+			if [ "$$status" -ne 0 ]; then \
+				docker compose ps -a; \
+				docker compose logs --no-color; \
+			fi; \
+			docker compose down -v; \
+			cleanup_status=$$?; \
+			if [ "$$cleanup_status" -ne 0 ]; then \
+				echo "E2E teardown failed with status $$cleanup_status" >&2; \
+			fi; \
+			if [ "$$status" -ne 0 ]; then exit "$$status"; fi; \
+			exit "$$cleanup_status"; \
+		}; \
+		trap cleanup EXIT; \
+		set -e; \
+		docker compose up -d --build --wait; \
+		GOWORK=off NORTHSTAR_E2E=1 go test -count=1 -v -timeout 120s ./...
 
 e2e-down:
 	cd e2e && docker compose down -v

@@ -1,7 +1,7 @@
-FROM golang:1.24-alpine AS build-env
+FROM golang:1.26.5-alpine AS build-env
 
 # Build phase
-RUN apk add build-base git
+RUN apk add bash build-base git
 
 ADD ./ /workspace/northstar
 WORKDIR /workspace/northstar
