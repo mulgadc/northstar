@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"net/http"
 	"os"
@@ -28,6 +30,7 @@ const (
 	accessKey    = "AKIAIOSFODNN7EXAMPLE"
 	secretKey    = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 	awsRegion    = "us-east-1"
+	testCAFile   = "testdata/certs/ca.pem"
 )
 
 func TestMain(m *testing.M) {
@@ -54,7 +57,31 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func s3Client() *s3.Client {
+func s3Client() (*s3.Client, error) {
+	caPEM, err := os.ReadFile(testCAFile)
+	if err != nil {
+		return nil, fmt.Errorf("reading E2E CA certificate: %w", err)
+	}
+
+	block, rest := pem.Decode(caPEM)
+	if block == nil || block.Type != "CERTIFICATE" {
+		return nil, fmt.Errorf("parsing E2E CA certificate %s: expected a CERTIFICATE PEM block", testCAFile)
+	}
+	if len(bytes.TrimSpace(rest)) != 0 {
+		return nil, fmt.Errorf("parsing E2E CA certificate %s: unexpected trailing content", testCAFile)
+	}
+
+	caCertificate, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("parsing E2E CA certificate %s: %w", testCAFile, err)
+	}
+	if !caCertificate.BasicConstraintsValid || !caCertificate.IsCA {
+		return nil, fmt.Errorf("validating E2E CA certificate %s: certificate is not a CA", testCAFile)
+	}
+
+	rootCAs := x509.NewCertPool()
+	rootCAs.AddCert(caCertificate)
+
 	return s3.New(s3.Options{
 		Region:       awsRegion,
 		BaseEndpoint: aws.String(predastore),
@@ -62,15 +89,20 @@ func s3Client() *s3.Client {
 		Credentials:  credentials.NewStaticCredentialsProvider(accessKey, secretKey, ""),
 		HTTPClient: &http.Client{
 			Transport: &http.Transport{
-				// predastore serves a self-signed cert in the compose stack.
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // G402: test-only client against the local compose stack
+				TLSClientConfig: &tls.Config{
+					MinVersion: tls.VersionTLS12,
+					RootCAs:    rootCAs,
+				},
 			},
 		},
-	})
+	}), nil
 }
 
 func uploadZoneFiles() error {
-	svc := s3Client()
+	svc, err := s3Client()
+	if err != nil {
+		return fmt.Errorf("creating S3 client: %w", err)
+	}
 
 	for _, name := range []string{"e2etest.net.toml", "nxdomain.test.toml"} {
 		zoneFile, err := os.ReadFile("testdata/" + name)
@@ -347,7 +379,8 @@ func TestE2E_WildcardExactOverride(t *testing.T) {
 // --- Zone Reload ---
 
 func TestE2E_ZoneReload(t *testing.T) {
-	svc := s3Client()
+	svc, err := s3Client()
+	require.NoError(t, err)
 
 	// Upload an updated zone file with a new IP
 	updatedZone := `
@@ -375,7 +408,7 @@ address = "10.20.30.200"
 domain = "www."
 address = "10.20.30.201"
 `
-	_, err := svc.PutObject(t.Context(), &s3.PutObjectInput{
+	_, err = svc.PutObject(t.Context(), &s3.PutObjectInput{
 		Bucket: aws.String(bucketName),
 		Key:    aws.String("e2etest.net.toml"),
 		Body:   bytes.NewReader([]byte(updatedZone)),
