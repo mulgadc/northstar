@@ -86,7 +86,9 @@ type S3Config struct {
 	Bucket    string `toml:"bucket"`
 	AccessKey string `toml:"access_key"`
 	SecretKey string `toml:"secret_key"`
-	Insecure  bool   `toml:"insecure"`
+	// Insecure disables certificate verification for explicit programmatic use.
+	// TOML excludes it so file-driven configuration cannot opt out.
+	Insecure bool `toml:"-"`
 }
 
 func init() {
@@ -137,7 +139,7 @@ func newS3Client(cfg *S3Config) *s3.Client {
 	if cfg.Insecure {
 		opts.HTTPClient = &http.Client{
 			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // G402: opt-in via S3Config.Insecure for self-signed S3 endpoints
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // G402: explicit standalone opt-in for self-signed S3 endpoints
 			},
 		}
 	}

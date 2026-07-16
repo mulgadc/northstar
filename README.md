@@ -77,7 +77,7 @@ All configuration is via environment variables.
 | `AWS_SECRET_ACCESS_KEY` | | AWS secret access key |
 | `AWS_REGION` | | AWS region |
 | `NORTHSTAR_S3_ENDPOINT` | | Custom S3 endpoint URL (for Predastore, MinIO, etc.) |
-| `NORTHSTAR_S3_INSECURE` | | Skip TLS verification for self-signed certs |
+| `NORTHSTAR_S3_INSECURE` | | Standalone environment mode only: skip S3 TLS certificate verification |
 | `S3_SYNC_RETRY` | `60` | S3 sync interval in seconds |
 
 ### Upstream Resolvers
@@ -218,12 +218,12 @@ address = "node1.spinifex.spx3.net."
 
 **Using Predastore as the zone file backend:**
 
-Mulga's S3-compatible storage ([Predastore](https://github.com/mulgadc/predastore)) can serve as the zone file backend, keeping DNS configuration alongside the rest of the Spinifex infrastructure:
+Mulga's S3-compatible storage ([Predastore](https://github.com/mulgadc/predastore)) can serve as the zone file backend, keeping DNS configuration alongside the rest of the Spinifex infrastructure. Northstar verifies the endpoint certificate using the system trust store; install a private CA there or provide it with `SSL_CERT_FILE` / `SSL_CERT_DIR`:
 
 ```sh
 ZONE_DIR="s3://dns-zones" \
 NORTHSTAR_S3_ENDPOINT="https://predastore.spinifex.spx3.net:8443" \
-NORTHSTAR_S3_INSECURE=1 \
+SSL_CERT_FILE="/path/to/spinifex-ca.pem" \
 AWS_ACCESS_KEY="..." \
 AWS_SECRET_ACCESS_KEY="..." \
 AWS_REGION="us-west-1" \

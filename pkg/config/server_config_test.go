@@ -28,7 +28,6 @@ bucket = "northstar"
 region = "ap-southeast-2"
 access_key = "AKIATEST"
 secret_key = "secret"
-insecure = true
 
 [quotas]
 enabled = true
@@ -52,7 +51,6 @@ nameservers = ["1.1.1.1:53", "tls://8.8.8.8:853"]
 	require.NotNil(t, s3)
 	assert.Equal(t, "northstar", s3.Bucket)
 	assert.Equal(t, "AKIATEST", s3.AccessKey)
-	assert.True(t, s3.Insecure)
 }
 
 func TestLoadServerConfigDefaults(t *testing.T) {

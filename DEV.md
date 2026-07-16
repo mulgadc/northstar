@@ -19,7 +19,7 @@
 - [x] **Wildcard records** — `*.domain.com` catch-all with exact match priority
 - [x] **Configurable upstream** — TLS/plaintext upstream resolvers with failover (`NORTHSTAR_UPSTREAM`)
 - [x] **S3 custom endpoint** — `NORTHSTAR_S3_ENDPOINT` for Predastore/S3-compatible backends
-- [x] **S3 TLS skip verify** — `NORTHSTAR_S3_INSECURE` for self-signed certs
+- [x] **S3 TLS verification** — Verified by default with an explicit standalone environment opt-out
 - [x] **Comprehensive unit tests** — 21 tests covering all record types, TCP/UDP, EDNS0, response codes, wildcards, concurrency
 - [x] **E2E test infrastructure** — Docker Compose with Predastore (S3 backend) + Northstar, 12 E2E test scenarios
 - [x] **Race condition clean** — All tests pass under `go test -race`

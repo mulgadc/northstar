@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -105,6 +106,11 @@ func loadConfig(path string) (config.ServerConfig, error) {
 	}
 
 	if endpoint := os.Getenv("NORTHSTAR_S3_ENDPOINT"); endpoint != "" {
+		insecure, err := envBool("NORTHSTAR_S3_INSECURE")
+		if err != nil {
+			return config.ServerConfig{}, err
+		}
+
 		bucket := strings.TrimPrefix(zoneDir, "s3://")
 		cfg.ZoneDir = ""
 		cfg.S3 = config.S3Config{
@@ -113,7 +119,7 @@ func loadConfig(path string) (config.ServerConfig, error) {
 			Bucket:    bucket,
 			AccessKey: os.Getenv("AWS_ACCESS_KEY"),
 			SecretKey: os.Getenv("AWS_SECRET_ACCESS_KEY"),
-			Insecure:  os.Getenv("NORTHSTAR_S3_INSECURE") != "",
+			Insecure:  insecure,
 		}
 	}
 
@@ -131,6 +137,19 @@ func logLevel() *slog.LevelVar {
 		level.Set(slog.LevelDebug)
 	}
 	return level
+}
+
+func envBool(key string) (bool, error) {
+	value, ok := os.LookupEnv(key)
+	if !ok || value == "" {
+		return false, nil
+	}
+
+	enabled, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, fmt.Errorf("parse %s: %w", key, err)
+	}
+	return enabled, nil
 }
 
 func envOr(key, def string) string {

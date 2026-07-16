@@ -1,14 +1,48 @@
 package config
 
 import (
+	"context"
+	"crypto/x509"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/pelletier/go-toml/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestNewS3ClientRejectsUntrustedCA(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	path := writeTOML(t, fmt.Sprintf(`
+[s3]
+endpoint = %q
+region = "us-east-1"
+bucket = "dns-zones"
+access_key = "AKIATEST"
+secret_key = "secret"
+insecure = true
+`, server.URL))
+	cfg, err := LoadServerConfig(path)
+	require.NoError(t, err)
+
+	client := newS3Client(cfg.S3Pointer())
+	_, err = client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
+		Bucket: aws.String("dns-zones"),
+	})
+	require.Error(t, err)
+
+	var unknownAuthority x509.UnknownAuthorityError
+	require.ErrorAs(t, err, &unknownAuthority)
+}
 
 func TestDomainLookup(t *testing.T) {
 	conf := GenerateTestDomains(1000)
