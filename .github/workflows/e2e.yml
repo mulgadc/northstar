@@ -39,7 +39,7 @@ jobs:
           path: predastore
 
       - name: Setup Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version-file: northstar/e2e/go.mod
           cache-dependency-path: northstar/e2e/go.sum
