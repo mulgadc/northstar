@@ -85,6 +85,13 @@ govulncheck:
 	$(_Q)go tool govulncheck ./...
 	@echo "  govulncheck ok"
 
+# NilAway — advisory nil-panic analysis. Not in preflight: it has a known
+# false-positive rate, so findings are triaged by hand rather than gating commits.
+nilaway:
+	@echo "Running nilaway..."
+	$(_Q)go tool nilaway -include-pkgs=github.com/mulgadc/northstar -exclude-test-files ./...
+	@echo "  nilaway ok"
+
 # E2E tests using Docker (predastore + northstar)
 e2e:
 	@echo -e "\n....Running E2E tests...."
@@ -120,4 +127,4 @@ docker:
 	docker buildx build --push --platform linux/arm/v7,linux/arm64/v8,linux/amd64 --tag $(DOCKER_IMAGE):latest .
 
 .PHONY: build go_build run preflight test test-cover test-race diff-coverage bench prof clean \
-	lint fix govulncheck e2e e2e-down docker
+	lint fix govulncheck nilaway e2e e2e-down docker
