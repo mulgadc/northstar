@@ -8,6 +8,36 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestReadZoneRawCorruptBodyIsIdentifiable(t *testing.T) {
+	// A body truncated mid-string, as interleaved concurrent PUTs produce.
+	s3cfg := fakeS3(t, "northstar", map[string]string{
+		"spx3.net.toml": "version = 1.0\n[domain]\ndomain = \"spx3.ne",
+	})
+
+	cfg, exists, err := ReadZoneRaw(s3cfg, "spx3.net")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrZoneCorrupt, "callers must be able to tell corrupt bytes from a backend failure")
+	assert.ErrorContains(t, err, "parse zone spx3.net", "the decoder's own message must survive for logs")
+	assert.False(t, exists)
+	assert.Empty(t, cfg.Records)
+}
+
+func TestReadZoneRawMissingZoneIsNotCorrupt(t *testing.T) {
+	s3cfg := fakeS3(t, "northstar", map[string]string{})
+
+	_, exists, err := ReadZoneRaw(s3cfg, "spx3.net")
+	require.NoError(t, err)
+	assert.False(t, exists)
+}
+
+func TestReadZoneRawBackendErrorIsNotCorrupt(t *testing.T) {
+	// No bucket configured: a config failure must never be mistaken for corrupt
+	// bytes, or a rebuild would fire while the backend is simply unreachable.
+	_, _, err := ReadZoneRaw(&S3Config{}, "spx3.net")
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, ErrZoneCorrupt)
+}
+
 func TestRenderZoneRoundTrips(t *testing.T) {
 	seed := BaseZoneSeed{
 		Domain:      "spx3.net",

@@ -20,6 +20,11 @@ const (
 	ClassIN uint16 = 1
 )
 
+// ErrZoneCorrupt marks a zone object that was fetched successfully but does not
+// parse. Callers need it to tell "the stored bytes are bad, rebuilding is safe"
+// apart from "the backend is unreachable, leave the zone alone".
+var ErrZoneCorrupt = errors.New("zone object is corrupt")
+
 // NewZoneConfig builds an in-memory zone (relative-label records, before
 // ApplyDefaults) from a seed: apex SOA/NS with glue A records plus TXT markers.
 // RenderBaseZone and the on-demand zone creation path both use it.
@@ -157,7 +162,9 @@ func ReadZoneRaw(s3cfg *S3Config, domain string) (ConfigArr, bool, error) {
 	defer func() { _ = out.Body.Close() }()
 
 	if err := toml.NewDecoder(out.Body).Decode(&cfg); err != nil {
-		return cfg, false, fmt.Errorf("parse zone %s: %w", domain, err)
+		// Wrap both so callers can branch on ErrZoneCorrupt while the decoder's
+		// own message survives for logs.
+		return cfg, false, fmt.Errorf("parse zone %s: %w: %w", domain, ErrZoneCorrupt, err)
 	}
 	return cfg, true, nil
 }
