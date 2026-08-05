@@ -9,25 +9,25 @@
 </p>
 
 <p align="center">
-  <a href="#what-is-spinifex">What is Spinifex?</a> ·
-  <a href="#the-platform">Platform</a> ·
-  <a href="#three-ways-to-deploy">Deploy</a> ·
-  <a href="#aws-compatibility">AWS services</a> ·
-  <a href="#core-components">Components</a> ·
-  <a href="#architecture-at-a-glance">Architecture</a> ·
-  <a href="#installation">Installation</a> ·
+  <a href="#why-northstar">Why Northstar?</a> ·
+  <a href="#features">Features</a> ·
+  <a href="#quickstart">Quick Start</a> ·
+  <a href="#configuration">Configuration</a> ·
+  <a href="#zone-file-format">Zone File Format</a> ·
+  <a href="#spinifex-integration">Spinifex Integration</a> ·
+  <a href="#docker">Docker</a> ·
   <a href="https://docs.mulgadc.com">Docs</a>
 </p>
 
-# Northstar
+---
 
-**Fast, lightweight authoritative DNS server built for infrastructure you own.**
+# Northstar: Fast, lightweight authoritative DNS server built for infrastructure you own.
 
 Northstar is a production-grade DNS server written in Go that gives you full control over your DNS infrastructure — no third-party API, no vendor dashboard, no per-query pricing. Define your zones in simple TOML files, store them on disk or in any S3-compatible object store, and let Northstar handle the rest.
 
 It speaks UDP, TCP, and DNS-over-TLS (DoT), responds in ~160 microseconds, and fits in a single static binary. Whether you're running a handful of domains on a VPS or powering service discovery across a distributed cluster, Northstar is designed to stay out of your way and just work.
 
-### Why Northstar?
+## Why Northstar?
 
 - **Self-hosted DNS done right** — Run your own authoritative nameserver without the operational complexity of BIND or PowerDNS. Zone files are human-readable TOML, configuration is environment variables, and the whole thing deploys as a single container.
 - **S3-native zone management** — Store zone files in AWS S3, [Predastore](https://github.com/mulgadc/predastore/), MinIO, or any S3-compatible backend. Northstar syncs automatically, so you can manage DNS records through the same object storage pipeline as the rest of your infrastructure.
