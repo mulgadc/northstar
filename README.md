@@ -10,6 +10,7 @@
 
 <p align="center">
   <a href="#why-northstar">Why Northstar?</a> ·
+  <a href="#architecture">Architecture</a> ·
   <a href="#features">Features</a> ·
   <a href="#quickstart">Quick Start</a> ·
   <a href="#configuration">Configuration</a> ·
@@ -33,6 +34,12 @@ It speaks UDP, TCP, and DNS-over-TLS (DoT), responds in ~160 microseconds, and f
 - **S3-native zone management** — Store zone files in AWS S3, [Predastore](https://github.com/mulgadc/predastore/), MinIO, or any S3-compatible backend. Northstar syncs automatically, so you can manage DNS records through the same object storage pipeline as the rest of your infrastructure.
 - **Built for [Spinifex](https://github.com/mulgadc/spinifex)** — Northstar serves as the DNS backbone for Spinifex, an open-source AWS alternative. It handles both internal service discovery (SRV records for NATS, gateways, and other cluster services) and public-facing authoritative DNS, all from the same instance.
 - **Plays nice with public resolvers** — Full RFC compliance means Cloudflare (1.1.1.1), Google (8.8.8.8), and every other recursive resolver can properly resolve your domains. TCP fallback, EDNS0, correct NXDOMAIN/NODATA semantics, proper authority sections — the things that matter when your DNS needs to actually work on the real internet.
+
+## Architecture
+
+<p align="center">
+  <img src=".github/assets/platform.svg" alt="Northstar: resolvers and infrastructure services on top, authoritative DNS over UDP, TCP, and DNS-over-TLS, with fast in-memory zones loaded from local files or S3-compatible storage." width="900">
+</p>
 
 ## Features
 
