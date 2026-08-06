@@ -100,13 +100,9 @@ dig @127.0.0.1 hello_a.net A +edns=0
   <img src=".github/assets/platform.svg" alt="Northstar: resolvers and infrastructure services on top, authoritative DNS over UDP, TCP, and DNS-over-TLS, with fast in-memory zones loaded from local files or S3-compatible storage." width="900">
 </p>
 
-Northstar loads authoritative zone data into an in-memory lookup structure.
-Zones can be read from the local filesystem or retrieved from an S3-compatible
-backend. Requests are accepted over UDP, TCP or DNS-over-TLS and answered from
-the authoritative zone store.
+Northstar loads authoritative zone data into an in-memory lookup structure. Zones can be read from the local filesystem or retrieved from an S3-compatible backend. Requests are accepted over UDP, TCP or DNS-over-TLS and answered from the authoritative zone store.
 
-Optional upstream resolvers can be configured with TLS and failover for CNAME
-chasing.
+Optional upstream resolvers can be configured with TLS and failover for CNAME chasing.
 
 ## Configuration
 
