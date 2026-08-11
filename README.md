@@ -1,7 +1,7 @@
 <p align="center">
-  <img 
-      src=".github/assets/banner.svg" 
-      alt="Northstar by Mulga — lightweight authoritative DNS with UDP, TCP and DNS-over-TLS support, in-memory lookups and zones stored locally or in S3.” 
+  <img
+      src=".github/assets/banner.svg"
+      alt="Northstar by Mulga — lightweight authoritative DNS with UDP, TCP and DNS-over-TLS support, in-memory lookups and zones stored locally or in S3.”
       width="900"
   >
 </p>
@@ -41,7 +41,7 @@ It can run independently or provide authoritative DNS and service discovery for 
 - **Built for [Spinifex](https://github.com/mulgadc/spinifex)** — Northstar serves as the DNS backbone for Spinifex, an open-source AWS alternative. It handles both internal service discovery (SRV records for NATS, gateways, and other cluster services) and public-facing authoritative DNS, all from the same instance.
 - **Plays nice with public resolvers** — Full RFC compliance means Cloudflare (1.1.1.1), Google (8.8.8.8), and every other recursive resolver can properly resolve your domains. TCP fallback, EDNS0, correct NXDOMAIN/NODATA semantics, proper authority sections — the things that matter when your DNS needs to actually work on the real internet.
 
-## Quick start
+## Quick Start
 
 ```bash
 git clone https://github.com/mulgadc/northstar
@@ -70,7 +70,7 @@ dig @127.0.0.1 hello_a.net A +edns=0
 - Graceful shutdown
 - Container deployment and single-binary distribution
 
-## Protocol and record support
+## Protocol and Record Support
 
 ### Protocols
 
@@ -79,7 +79,7 @@ dig @127.0.0.1 hello_a.net A +edns=0
 - DNS over TLS
 - EDNS0
 
-### Record types
+### Record Types
 
 | Type | Code | Primary fields |
 | --- | ---: | --- |
