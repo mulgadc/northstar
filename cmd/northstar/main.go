@@ -12,9 +12,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mulgadc/bluebottle/pkg/otelsetup"
 	"github.com/mulgadc/northstar/pkg/config"
 	"github.com/mulgadc/northstar/pkg/server"
-	"github.com/mulgadc/northstar/pkg/telemetry"
 )
 
 // Version is set via ldflags at build time.
@@ -28,7 +28,7 @@ func main() {
 	level := logLevel()
 
 	// Telemetry is best-effort: a failed init never blocks the DNS daemon.
-	otelShutdown, err := telemetry.Init(context.Background(), "northstar")
+	otelShutdown, err := otelsetup.Init(context.Background(), "northstar")
 	if err != nil {
 		slog.Warn("Telemetry init failed, continuing without export", "error", err)
 	} else {
@@ -41,7 +41,7 @@ func main() {
 		}()
 	}
 
-	telemetry.SetDefaultJSONLogger(level)
+	otelsetup.SetDefaultJSONLogger("northstar", level)
 
 	fmt.Printf(`
 
@@ -132,7 +132,7 @@ func loadConfig(path string) (config.ServerConfig, error) {
 }
 
 // logLevel builds the slog level from NORTHSTAR_LOG_IGNORE / NORTHSTAR_LOG_DEBUG,
-// for telemetry.SetDefaultJSONLogger.
+// for otelsetup.SetDefaultJSONLogger.
 func logLevel() *slog.LevelVar {
 	level := new(slog.LevelVar)
 	if _, ok := os.LookupEnv("NORTHSTAR_LOG_IGNORE"); ok {

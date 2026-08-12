@@ -19,7 +19,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/fsnotify/fsnotify"
-	"github.com/mulgadc/northstar/pkg/telemetry"
+	"github.com/mulgadc/bluebottle/pkg/otelsetup"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -104,7 +104,7 @@ func init() {
 		level.Set(slog.LevelDebug)
 	}
 
-	telemetry.SetDefaultJSONLogger(level)
+	otelsetup.SetDefaultJSONLogger("northstar", level)
 }
 
 // endpointSchemeRE matches a leading URI scheme.

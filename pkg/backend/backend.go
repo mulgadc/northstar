@@ -21,7 +21,7 @@ type Handler struct {
 }
 
 // NewHandler constructs a Handler wired for OTel metrics/traces bound to the
-// current global meter/tracer (see pkg/telemetry.Init), and threads the same
+// current global meter/tracer (see bluebottle/pkg/otelsetup.Init), and threads the same
 // instruments into upstream so forwarder spans/metrics share one tracer.
 func NewHandler(conf *config.Config, upstream *Upstream) *Handler {
 	inst := newInstruments()
