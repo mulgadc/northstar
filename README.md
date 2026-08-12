@@ -366,6 +366,10 @@ See [DEV.md](DEV.md) for the full development plan.
 
 Roadmap items describe direction and are not commitments to a release date.
 
+## Trademarks
+
+Amazon Web Services, AWS, Amazon S3 and Amazon Route 53 are trademarks of Amazon.com, Inc. or its affiliates. Northstar is not affiliated with or endorsed by Amazon Web Services.
+
 ## License
 
 Northstar is licensed under the [GNU Affero General Public License v3.0 (AGPLv3)](LICENSE) license.
