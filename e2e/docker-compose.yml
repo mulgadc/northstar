@@ -14,24 +14,29 @@ services:
         RUN printf '0123456789abcdef0123456789abcdef' > /encryption.key && chmod 600 /encryption.key
         EXPOSE 9443
         CMD ["/s3d"]
-    environment:
-      PORT: "9443"
-      CONFIG: "/config/predastore.toml"
-      TLS_CERT: "/certs/predastore.pem"
-      TLS_KEY: "/certs/predastore.key"
-      SSL_CERT_FILE: "/certs/ca.pem"
-      ENCRYPTION_KEY_FILE: "/encryption.key"
+    # s3d takes everything host-local as a flag, so the config file stays the
+    # same on every machine and the paths live next to the mounts below.
+    command:
+      - "/s3d"
+      - "-config=/config/predastore.toml"
+      - "-host=1"
+      - "-data-dir=/data"
+      - "-tls-cert=/certs/predastore.pem"
+      - "-tls-key=/certs/predastore.key"
+      - "-encryption-key=/encryption.key"
     volumes:
       - ./testdata/predastore.toml:/config/predastore.toml:ro
       - ./testdata/certs:/certs:ro
-      - zone-data:/data/dns-zones
+      - predastore-data:/data
     ports:
       - "9443:9443"
+    # The gate only listens once the meta replica has elected a leader, so an
+    # open port is a real readiness signal rather than a bind.
     healthcheck:
       test: ["CMD", "nc", "-z", "127.0.0.1", "9443"]
       interval: 2s
       timeout: 5s
-      retries: 10
+      retries: 30
 
   northstar:
     build:
@@ -61,4 +66,4 @@ services:
         condition: service_healthy
 
 volumes:
-  zone-data:
+  predastore-data:
