@@ -19,7 +19,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/fsnotify/fsnotify"
-	"github.com/mulgadc/bluebottle/pkg/otelsetup"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -91,21 +90,10 @@ type S3Config struct {
 	Insecure bool `toml:"-"`
 }
 
-func init() {
-	level := new(slog.LevelVar)
-
-	// NORTHSTAR_LOG_IGNORE silences everything below fatal; NORTHSTAR_LOG_DEBUG
-	// enables debug output. Default is info.
-	if _, ok := os.LookupEnv("NORTHSTAR_LOG_IGNORE"); ok {
-		level.Set(slog.LevelError + 4)
-	}
-
-	if _, ok := os.LookupEnv("NORTHSTAR_LOG_DEBUG"); ok {
-		level.Set(slog.LevelDebug)
-	}
-
-	otelsetup.SetDefaultJSONLogger("northstar", level)
-}
+// This package installs no logger. Setting the process-wide slog default is
+// the entrypoint's job (cmd/northstar reads NORTHSTAR_LOG_IGNORE and
+// NORTHSTAR_LOG_DEBUG); doing it here would hijack the logger of every binary
+// that merely links this package.
 
 // endpointSchemeRE matches a leading URI scheme.
 var endpointSchemeRE = regexp.MustCompile(`^[^:]+://`)
