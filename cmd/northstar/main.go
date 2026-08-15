@@ -25,7 +25,9 @@ func main() {
 	configPath := flag.String("config", "", "path to northstar.toml")
 	flag.Parse()
 
-	level := logLevel()
+	// Install the default before anything logs. Init reinstalls it once the
+	// LoggerProvider exists, so the OTLP bridge is attached either way.
+	otelsetup.SetDefaultJSONLogger("northstar", logLevel())
 
 	// Telemetry is best-effort: a failed init never blocks the DNS daemon.
 	otelShutdown, err := otelsetup.Init(context.Background(), "northstar")
@@ -40,8 +42,6 @@ func main() {
 			}
 		}()
 	}
-
-	otelsetup.SetDefaultJSONLogger("northstar", level)
 
 	fmt.Printf(`
 
