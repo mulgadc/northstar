@@ -110,8 +110,7 @@ func EnsureBaseZone(s3cfg *S3Config, seed BaseZoneSeed) (bool, error) {
 func isNotFound(err error) bool {
 	// Checked first so the 404 fallback below cannot reclassify a missing bucket
 	// as a missing object.
-	var noBucket *types.NoSuchBucket
-	if errors.As(err, &noBucket) {
+	if _, ok := errors.AsType[*types.NoSuchBucket](err); ok {
 		return false
 	}
 
@@ -123,8 +122,7 @@ func isNotFound(err error) bool {
 
 	// Backends vary in the code they return, and HeadObject has no body to carry
 	// one at all, so fall back to the error code then the status line.
-	var apiErr smithy.APIError
-	if errors.As(err, &apiErr) {
+	if apiErr, ok := errors.AsType[smithy.APIError](err); ok {
 		switch apiErr.ErrorCode() {
 		case "NoSuchBucket":
 			return false
