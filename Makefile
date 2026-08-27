@@ -2,6 +2,8 @@ GO_PROJECT_NAME := northstar
 DOCKER_IMAGE := calacode/northstar-dns
 SHELL := /bin/bash
 
+export GOFIPS140 := v1.0.0
+
 # Quiet-mode filters (active when QUIET=1, set by preflight via recursive make)
 # Note: grep pipelines use PIPESTATUS[0] so the exit status of `go test`
 # propagates through the filter — otherwise a test failure is swallowed by
@@ -25,7 +27,7 @@ LDFLAGS := -s -w -X main.Version=$(VERSION)
 
 go_build:
 	@echo -e "\n....Building $(GO_PROJECT_NAME)"
-	GOFIPS140=v1.0.0 go build -ldflags "$(LDFLAGS)" -o ./bin/$(GO_PROJECT_NAME) ./cmd/northstar
+	go build -ldflags "$(LDFLAGS)" -o ./bin/$(GO_PROJECT_NAME) ./cmd/northstar
 
 # Build and run locally (override the listen port for non-root, e.g. PORT=5353)
 run: go_build
