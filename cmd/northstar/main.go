@@ -15,6 +15,8 @@ import (
 	"github.com/mulgadc/bluebottle/pkg/otelsetup"
 	"github.com/mulgadc/northstar/pkg/config"
 	"github.com/mulgadc/northstar/pkg/server"
+
+	_ "github.com/mulgadc/bluebottle/pkg/fipsboot"
 )
 
 // Version is set via ldflags at build time.

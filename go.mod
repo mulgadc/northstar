@@ -9,7 +9,7 @@ require (
 	github.com/aws/smithy-go v1.27.8
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/miekg/dns v1.1.73
-	github.com/mulgadc/bluebottle v1.18.0
+	github.com/mulgadc/bluebottle v1.18.1-0.20260827043632-fca81ec29266
 	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/stretchr/testify v1.12.1
 	go.opentelemetry.io/otel v1.45.0
