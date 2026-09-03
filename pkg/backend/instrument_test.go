@@ -114,7 +114,7 @@ func TestServeDNSRecordsQueryMetricAndSpan(t *testing.T) {
 
 	// Instruments bind to the global meter/tracer at construction, so the
 	// Handler must be built after the test providers are installed above.
-	handler := backend.NewHandler(newAuthoritativeTestConfig(), backend.NewUpstream(nil))
+	handler := backend.NewHandler(newAuthoritativeTestConfig(), backend.NewUpstream(nil), backend.NewRecursionPolicy(false, nil))
 
 	m := new(dns.Msg)
 	m.SetQuestion("example.test.", dns.TypeA)
@@ -173,7 +173,7 @@ func TestServeDNSUpstreamForwardMetricAndSpan(t *testing.T) {
 		Records: make(map[config.DomainLookup][]config.Records),
 		Domain:  make(map[string]config.Domain),
 	}
-	handler := backend.NewHandler(cfg, upstream)
+	handler := backend.NewHandler(cfg, upstream, backend.NewRecursionPolicy(false, nil))
 
 	m := new(dns.Msg)
 	m.SetQuestion("recurse.example.", dns.TypeA)

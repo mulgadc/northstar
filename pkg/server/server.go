@@ -37,15 +37,25 @@ type Server struct {
 // any listeners or read any zones until Start is called.
 func NewServer(cfg config.ServerConfig) (*Server, error) {
 	upstream := backend.NewUpstream(backend.ParseUpstreamServers(cfg.Upstream.Nameservers))
+	allowed, err := cfg.Upstream.ParseAllowRecursionFrom()
+	if err != nil {
+		return nil, err
+	}
 	zoneDB := &config.Config{
 		Records: make(map[config.DomainLookup][]config.Records),
 		Domain:  make(map[string]config.Domain),
 	}
 
+	recursion := backend.NewRecursionPolicy(cfg.Upstream.AllowRecursion, allowed)
+	if cfg.Upstream.AllowRecursion {
+		slog.Warn("northstar: recursion is open to every client, including the internet",
+			"hint", "set [upstream].allow_recursion=false and list trusted clients in allow_recursion_from")
+	}
+
 	return &Server{
 		cfg:     cfg,
 		zoneDB:  zoneDB,
-		handler: backend.NewHandler(zoneDB, upstream),
+		handler: backend.NewHandler(zoneDB, upstream, recursion),
 	}, nil
 }
 

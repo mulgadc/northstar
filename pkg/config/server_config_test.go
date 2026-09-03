@@ -97,3 +97,41 @@ func TestLoadServerConfigValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestAllowRecursionDefaultsClosed(t *testing.T) {
+	cfg, err := LoadServerConfig(writeTOML(t, `
+zone_dir = "/tmp/zones"
+`))
+	require.NoError(t, err)
+	assert.False(t, cfg.Upstream.AllowRecursion, "recursion must default closed on a public-facing resolver")
+	assert.Empty(t, cfg.Upstream.AllowRecursionFrom)
+}
+
+func TestParseAllowRecursionFrom(t *testing.T) {
+	cfg, err := LoadServerConfig(writeTOML(t, `
+zone_dir = "/tmp/zones"
+
+[upstream]
+allow_recursion_from = ["10.2.0.2", "72.52.77.224/27", "2001:db8::/32"]
+`))
+	require.NoError(t, err)
+
+	prefixes, err := cfg.Upstream.ParseAllowRecursionFrom()
+	require.NoError(t, err)
+	require.Len(t, prefixes, 3)
+	// A bare address becomes a single-host prefix, so node IPs need no /32.
+	assert.Equal(t, "10.2.0.2/32", prefixes[0].String())
+	assert.Equal(t, "72.52.77.224/27", prefixes[1].String())
+	assert.Equal(t, "2001:db8::/32", prefixes[2].String())
+}
+
+func TestAllowRecursionFromRejectsGarbageAtLoad(t *testing.T) {
+	_, err := LoadServerConfig(writeTOML(t, `
+zone_dir = "/tmp/zones"
+
+[upstream]
+allow_recursion_from = ["not-an-address"]
+`))
+	require.Error(t, err, "a malformed entry must fail startup, not every query")
+	assert.Contains(t, err.Error(), "allow_recursion_from")
+}
