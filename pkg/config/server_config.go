@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/netip"
 	"os"
 	"strings"
 	"time"
@@ -44,8 +45,23 @@ type Quotas struct {
 
 // UpstreamConfig lists forwarders for non-authoritative queries. An empty list
 // means non-authoritative queries are refused (air-gap safe).
+//
+// Forwarding is a separate decision from who may ask for it: AllowRecursion and
+// AllowRecursionFrom gate the recursion path by client address. Authoritative
+// answers are never gated — a public authoritative server must answer anyone.
 type UpstreamConfig struct {
 	Nameservers []string `toml:"nameservers"`
+	// AllowRecursion opens recursion to every client, including the public
+	// internet. Defaults to false, which is the only safe value on a node whose
+	// DNS port faces the internet: an open resolver is a DDoS reflector and gets
+	// its address range blocklisted. Trusted clients do not need this — list
+	// them in AllowRecursionFrom instead.
+	AllowRecursion bool `toml:"allow_recursion"`
+	// AllowRecursionFrom are CIDRs whose clients may recurse regardless of
+	// AllowRecursion. This is the intended way to serve recursion: cluster nodes
+	// resolve through northstar, and vpcd's per-tap guest DNS shim relays guest
+	// queries from a node address, so both are covered by listing the nodes.
+	AllowRecursionFrom []string `toml:"allow_recursion_from"`
 }
 
 const (
@@ -98,7 +114,34 @@ func (c *ServerConfig) validate() error {
 	if (c.TLSCert == "") != (c.TLSKey == "") {
 		return fmt.Errorf("tls_cert and tls_key must be set together")
 	}
+	if _, err := c.Upstream.ParseAllowRecursionFrom(); err != nil {
+		return err
+	}
 	return nil
+}
+
+// ParseAllowRecursionFrom parses AllowRecursionFrom into prefixes. A bare
+// address is accepted and treated as a single-host prefix, since an operator
+// listing node IPs should not have to write /32 on each. Parsed once at load so
+// a malformed entry fails startup rather than every query.
+func (u *UpstreamConfig) ParseAllowRecursionFrom() ([]netip.Prefix, error) {
+	var prefixes []netip.Prefix
+	for _, entry := range u.AllowRecursionFrom {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if prefix, err := netip.ParsePrefix(entry); err == nil {
+			prefixes = append(prefixes, prefix.Masked())
+			continue
+		}
+		addr, err := netip.ParseAddr(entry)
+		if err != nil {
+			return nil, fmt.Errorf("invalid [upstream].allow_recursion_from entry %q: not an IP or CIDR", entry)
+		}
+		prefixes = append(prefixes, netip.PrefixFrom(addr, addr.BitLen()))
+	}
+	return prefixes, nil
 }
 
 // ListenAddrs returns the parsed, trimmed list of bind addresses.

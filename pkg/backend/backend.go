@@ -17,18 +17,21 @@ import (
 type Handler struct {
 	Conf     *config.Config
 	Upstream *Upstream
-	inst     *instruments
+	// Recursion gates who may have a query forwarded upstream. A nil policy
+	// refuses everyone, so a Handler built without one is authoritative-only.
+	Recursion *RecursionPolicy
+	inst      *instruments
 }
 
 // NewHandler constructs a Handler wired for OTel metrics/traces bound to the
 // current global meter/tracer (see bluebottle/pkg/otelsetup.Init), and threads the same
 // instruments into upstream so forwarder spans/metrics share one tracer.
-func NewHandler(conf *config.Config, upstream *Upstream) *Handler {
+func NewHandler(conf *config.Config, upstream *Upstream, recursion *RecursionPolicy) *Handler {
 	inst := newInstruments()
 	if upstream != nil {
 		upstream.inst = inst
 	}
-	return &Handler{Conf: conf, Upstream: upstream, inst: inst}
+	return &Handler{Conf: conf, Upstream: upstream, Recursion: recursion, inst: inst}
 }
 
 // ServeDNS implements dns.Handler for the UDP/TCP/DoT listeners, which pass no
@@ -101,6 +104,12 @@ func (h *Handler) serve(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) *
 
 	slog.Debug("DNS request", "domain", domain, "client", w.RemoteAddr().String(), "type", qtype)
 
+	// Advertise recursion only to clients that would actually get it, so we do
+	// not invite queries we intend to refuse. Decided once here because the
+	// refusal below and this flag must never disagree.
+	recursionAllowed := h.Recursion.Allows(clientAddr(w))
+	msg.RecursionAvailable = recursionAllowed
+
 	// Handle EDNS0
 	var clientBufSize uint16 = 512
 	if opt := r.IsEdns0(); opt != nil {
@@ -154,7 +163,17 @@ func (h *Handler) serve(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) *
 			msg.Authoritative = true
 			msg.Ns = []dns.RR{h.SOA(domain, zone)}
 		} else {
-			// Not our zone → recurse to the configured upstream forwarders.
+			// Not our zone → recurse to the configured upstream forwarders, but
+			// only for clients the policy trusts. Recursing for anyone makes a
+			// public authoritative server an open resolver, so an untrusted
+			// client is REFUSED here even when forwarders are configured.
+			if !recursionAllowed {
+				h.inst.recordRecursionRefused(ctx)
+				slog.Debug("recursion refused", "domain", domain, "client", w.RemoteAddr().String())
+				msg.SetRcode(r, dns.RcodeRefused)
+				msg.RecursionAvailable = false
+				return &msg
+			}
 			// With no forwarders configured we refuse (air-gap safe).
 			if h.Upstream != nil && h.Upstream.HasServers() {
 				if resp, err := h.Upstream.Exchange(ctx, r); err == nil && resp != nil {

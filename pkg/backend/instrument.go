@@ -30,6 +30,7 @@ type instruments struct {
 	queryDuration    metric.Float64Histogram
 	upstreamForwards metric.Int64Counter
 	upstreamDuration metric.Float64Histogram
+	recursionRefused metric.Int64Counter
 }
 
 // newInstruments builds the shared DNS instruments from the current global
@@ -69,6 +70,13 @@ func newInstruments() *instruments {
 		slog.Debug("failed to create northstar.dns.upstream.duration instrument", "error", err)
 	}
 
+	inst.recursionRefused, err = meter.Int64Counter("northstar.dns.recursion.refused",
+		metric.WithDescription("Count of recursive queries refused by source policy."),
+		metric.WithUnit("{query}"))
+	if err != nil {
+		slog.Debug("failed to create northstar.dns.recursion.refused instrument", "error", err)
+	}
+
 	return inst
 }
 
@@ -93,6 +101,15 @@ func (in *instruments) recordQuery(ctx context.Context, countAttrs, durationAttr
 	if in.queryDuration != nil {
 		in.queryDuration.Record(ctx, elapsed.Seconds(), metric.WithAttributes(durationAttrs...))
 	}
+}
+
+// recordRecursionRefused counts one recursive query refused because its source
+// is outside the policy. Safe to call with a nil receiver.
+func (in *instruments) recordRecursionRefused(ctx context.Context) {
+	if in == nil || in.recursionRefused == nil {
+		return
+	}
+	in.recursionRefused.Add(ctx, 1)
 }
 
 // recordUpstream records one upstream forwarder attempt on the forwards

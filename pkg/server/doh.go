@@ -126,11 +126,15 @@ var _ dns.ResponseWriter = (*dohResponseWriter)(nil)
 
 func (d *dohResponseWriter) WriteMsg(m *dns.Msg) error { d.msg = m; return nil }
 
+// RemoteAddr reports the HTTP client address. An unresolvable one returns an
+// address with no IP rather than loopback: the recursion policy trusts loopback
+// unconditionally, so falling back to it would let any client that can make this
+// string unparseable recurse. Fail closed instead.
 func (d *dohResponseWriter) RemoteAddr() net.Addr {
 	if addr, err := net.ResolveTCPAddr("tcp", d.remote); err == nil {
 		return addr
 	}
-	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0}
+	return &net.TCPAddr{}
 }
 
 func (d *dohResponseWriter) LocalAddr() net.Addr { return &net.TCPAddr{} }

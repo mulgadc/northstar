@@ -1,6 +1,7 @@
 package server
 
 import (
+	"net"
 	"testing"
 
 	"github.com/miekg/dns"
@@ -38,9 +39,18 @@ func TestDoHResponseWriter(t *testing.T) {
 	w.Hijack()
 }
 
-// TestDoHRemoteAddrFallback verifies RemoteAddr falls back to loopback when the
-// HTTP remote address cannot be parsed.
-func TestDoHRemoteAddrFallback(t *testing.T) {
+// TestDoHRemoteAddrFallbackFailsClosed verifies an unparseable HTTP remote
+// address yields no IP rather than loopback. The recursion policy trusts
+// loopback unconditionally, so the old fallback would have let any client that
+// can make this string unparseable recurse.
+func TestDoHRemoteAddrFallbackFailsClosed(t *testing.T) {
 	w := &dohResponseWriter{remote: "not-an-address"}
-	assert.NotNil(t, w.RemoteAddr())
+
+	addr := w.RemoteAddr()
+	require.NotNil(t, addr)
+
+	tcp, ok := addr.(*net.TCPAddr)
+	require.True(t, ok)
+	assert.Nil(t, tcp.IP, "must not fall back to a trusted address")
+	assert.False(t, tcp.IP.IsLoopback())
 }
