@@ -18,6 +18,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/fsnotify/fsnotify"
 	"github.com/pelletier/go-toml/v2"
 )
@@ -36,10 +37,14 @@ type ConfigArr struct {
 }
 
 type Domain struct {
-	Domain    string
-	SOA       string
-	Created   time.Time
-	Modified  time.Time
+	Domain   string
+	SOA      string
+	Created  time.Time
+	Modified time.Time
+	// ETag is the source object's content hash, when the zone came from S3. It is
+	// the change signal the reload poll compares: unlike Modified it does not
+	// depend on clock precision or on the object being rewritten with same bytes.
+	ETag      string
 	Verified  bool
 	Active    bool
 	OwnerID   uint32
@@ -272,7 +277,7 @@ func (config *Config) MonitorConfig(ctx context.Context, zone_dir string, s3cfg 
 				domainEntry, exists := config.Domain[domain]
 				config.Mu.RUnlock()
 
-				if exists && *item.LastModified != domainEntry.Modified {
+				if exists && zoneChanged(item, domainEntry) {
 					slog.Info("MonitorConfig: new config file detected, reloading", "key", *item.Key)
 
 					myconfig, err := ReadZone(fmt.Sprintf("%s/%s", zone_dir, *item.Key), *item.LastModified, s3cfg)
@@ -283,8 +288,7 @@ func (config *Config) MonitorConfig(ctx context.Context, zone_dir string, s3cfg 
 					}
 
 					if err := checkConfigDomainMatch(*item.Key, myconfig.Domain.Domain); err == nil {
-						config.DeleteZone(domainEntry.Domain)
-						config.AddZone(myconfig)
+						config.ReplaceZone(myconfig)
 					} else {
 						slog.Error("MonitorConfig: domain and config file mismatch, entry skipped", "domain", domain, "key", *item.Key, "error", err)
 					}
@@ -336,8 +340,7 @@ func (config *Config) MonitorConfig(ctx context.Context, zone_dir string, s3cfg 
 					}
 
 					if err := checkConfigDomainMatch(event.Name, myconfig.Domain.Domain); err == nil {
-						config.DeleteZone(myconfig.Domain.Domain)
-						config.AddZone(myconfig)
+						config.ReplaceZone(myconfig)
 					} else {
 						slog.Error("MonitorConfig: domain and config file mismatch", "name", event.Name, "error", err)
 					}
@@ -600,7 +603,16 @@ func ReadZone(zone_file string, lastModified time.Time, s3cfg *S3Config) (myconf
 		if err := toml.Unmarshal(body, &myconfig); err != nil {
 			return myconfig, err
 		}
+
+		// The object's own metadata beats whatever the caller passed: a caller
+		// that stamps time.Now() would otherwise store a version that no listing
+		// can ever match, reloading the zone on every poll thereafter. A backend
+		// that does not date its objects is left to the caller's value.
+		if out.LastModified != nil && !out.LastModified.IsZero() {
+			lastModified = *out.LastModified
+		}
 		ApplyDefaults(&myconfig, lastModified)
+		myconfig.Domain.ETag = normaliseETag(aws.ToString(out.ETag))
 	} else {
 		file, err := os.ReadFile(zone_file)
 
@@ -615,6 +627,27 @@ func ReadZone(zone_file string, lastModified time.Time, s3cfg *S3Config) (myconf
 	}
 
 	return myconfig, nil
+}
+
+// normaliseETag strips the quoting and weak-validator prefix S3 wraps an ETag
+// in, so a value from a listing compares equal to the same value from a GET.
+func normaliseETag(etag string) string {
+	return strings.Trim(strings.TrimPrefix(strings.TrimSpace(etag), "W/"), `"`)
+}
+
+// zoneChanged reports whether a listed object differs from the loaded zone.
+// ETag answers "did the content change" directly, so it is preferred; the
+// timestamp is the fallback for a backend that omits one.
+func zoneChanged(item s3types.Object, loaded Domain) bool {
+	if etag := normaliseETag(aws.ToString(item.ETag)); etag != "" && loaded.ETag != "" {
+		return etag != loaded.ETag
+	}
+
+	if item.LastModified == nil {
+		return false
+	}
+
+	return !item.LastModified.Equal(loaded.Modified)
 }
 
 func checkConfigDomainMatch(filename string, domain string) (err error) {
