@@ -1,0 +1,29 @@
+name: Feature request
+description: Suggest something new.
+labels: ["enhancement"]
+body:
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Resolver (UDP / TCP)
+        - DNS-over-TLS
+        - Zone files / parsing
+        - Record types
+        - S3 zone backend
+        - Spinifex integration
+        - Configuration / deployment
+        - Observability / telemetry
+        - Documentation
+        - Other / not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like to see?
+      description: What you are trying to do, and what stops you today.
+    validations:
+      required: true
