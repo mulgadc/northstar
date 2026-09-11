@@ -20,6 +20,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/fsnotify/fsnotify"
+	"github.com/miekg/dns"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -140,14 +141,49 @@ func newS3Client(cfg *S3Config) *s3.Client {
 	return s3.New(opts)
 }
 
+// CanonicalFQDN lowercases a name and gives it a trailing dot, which is the
+// form record keys are stored in. DNS names are case-insensitive (RFC 1035
+// §2.3.3), so every lookup has to compare canonical forms on both sides or a
+// resolver using DNS 0x20 case randomisation cannot resolve anything we serve.
+//
+// dns.CanonicalName rather than strings.ToLower because RFC 4343 restricts the
+// case rule to ASCII, and Unicode lowercasing would mangle bytes in a label.
+func CanonicalFQDN(name string) string {
+	return dns.CanonicalName(name)
+}
+
+// CanonicalZone is CanonicalFQDN without the trailing dot, the form the Domain
+// map is keyed by. The root zone canonicalises to "." and is left as-is rather
+// than becoming the empty string, which would collide with "no zone found".
+func CanonicalZone(name string) string {
+	c := CanonicalFQDN(name)
+	if c == "." {
+		return c
+	}
+	return strings.TrimSuffix(c, ".")
+}
+
+// zoneObjectKey is the S3 key a zone is stored under. S3 keys are
+// case-sensitive while DNS names are not, so the key is always canonical —
+// otherwise the same zone written as "Example.com" and read as "example.com"
+// becomes two objects, and whichever the reader misses looks like a zone that
+// does not exist.
+func zoneObjectKey(domain string) string {
+	return CanonicalZone(domain) + ".toml"
+}
+
 // FindZone walks up the domain labels to find which zone we are authoritative for.
 // Returns the zone name and true if found, or empty string and false.
+//
+// The returned name is the canonical stored key, never the caller's spelling of
+// it. Callers build NS and SOA lookups from this value, so handing back the
+// query's case would push the mismatch one level down instead of fixing it.
 func (c *Config) FindZone(name string) (string, bool) {
 	c.Mu.RLock()
 	defer c.Mu.RUnlock()
 
 	// Walk up labels: "foo.bar.example.com." → "bar.example.com." → "example.com."
-	labels := strings.Split(name, ".")
+	labels := strings.Split(CanonicalFQDN(name), ".")
 	for i := range labels {
 		candidate := strings.Join(labels[i:], ".")
 		// Strip trailing dot for domain map lookup
@@ -160,12 +196,15 @@ func (c *Config) FindZone(name string) (string, bool) {
 }
 
 // NameExists checks if any records exist for a given domain name (any type).
+// This drives the NODATA-vs-NXDOMAIN decision, so a case-sensitive comparison
+// here returns a cacheable authoritative NXDOMAIN for a name that exists.
 func (c *Config) NameExists(name string) bool {
 	c.Mu.RLock()
 	defer c.Mu.RUnlock()
 
+	canonical := CanonicalFQDN(name)
 	for key := range c.Records {
-		if key.Domain == name {
+		if key.Domain == canonical {
 			return true
 		}
 	}
@@ -415,8 +454,10 @@ func ApplyDefaults(config *ConfigArr, lastModified time.Time) {
 			config.Records[i].Preference = 10
 		}
 
-		// Append the root domain to the record
-		config.Records[i].Domain = fmt.Sprintf("%s%s.", config.Records[i].Domain, config.Domain.Domain)
+		// Append the root domain to the record. Canonicalised because this string
+		// becomes a map key, and a zone file spelling a label or its own domain
+		// in mixed case would otherwise build a key no query can match.
+		config.Records[i].Domain = CanonicalFQDN(fmt.Sprintf("%s%s.", config.Records[i].Domain, config.Domain.Domain))
 
 		// Check record size, 255 bytes max
 		rsize := len(config.Records[i].Address)
@@ -508,12 +549,12 @@ func (t *Config) AddZone(myconfig ConfigArr) {
 	defer t.Mu.Unlock()
 
 	for _, item := range myconfig.Records {
-		record := DomainLookup{Domain: item.Domain, Type: item.Type, Class: item.Class}
+		record := DomainLookup{Domain: CanonicalFQDN(item.Domain), Type: item.Type, Class: item.Class}
 		t.Records[record] = append(t.Records[record], item)
 		myconfig.Domain.RecordRef = append(myconfig.Domain.RecordRef, record)
 	}
 
-	t.Domain[myconfig.Domain.Domain] = myconfig.Domain
+	t.Domain[CanonicalZone(myconfig.Domain.Domain)] = myconfig.Domain
 
 	slog.Info("added zone to local DNS DB", "domain", myconfig.Domain.Domain)
 }
@@ -526,8 +567,10 @@ func (t *Config) ReplaceZone(myconfig ConfigArr) {
 	t.Mu.Lock()
 	defer t.Mu.Unlock()
 
+	zoneKey := CanonicalZone(myconfig.Domain.Domain)
+
 	// Drop the previous incarnation of this zone, if present.
-	if old, ok := t.Domain[myconfig.Domain.Domain]; ok {
+	if old, ok := t.Domain[zoneKey]; ok {
 		for _, ref := range old.RecordRef {
 			delete(t.Records, ref)
 		}
@@ -535,11 +578,11 @@ func (t *Config) ReplaceZone(myconfig ConfigArr) {
 
 	myconfig.Domain.RecordRef = nil
 	for _, item := range myconfig.Records {
-		record := DomainLookup{Domain: item.Domain, Type: item.Type, Class: item.Class}
+		record := DomainLookup{Domain: CanonicalFQDN(item.Domain), Type: item.Type, Class: item.Class}
 		t.Records[record] = append(t.Records[record], item)
 		myconfig.Domain.RecordRef = append(myconfig.Domain.RecordRef, record)
 	}
-	t.Domain[myconfig.Domain.Domain] = myconfig.Domain
+	t.Domain[zoneKey] = myconfig.Domain
 
 	slog.Info("replaced zone in local DNS DB", "domain", myconfig.Domain.Domain, "records", len(myconfig.Records))
 }
@@ -548,7 +591,9 @@ func (t *Config) DeleteZone(domain string) {
 	t.Mu.Lock()
 	defer t.Mu.Unlock()
 
-	record, ok := t.Domain[domain]
+	zoneKey := CanonicalZone(domain)
+
+	record, ok := t.Domain[zoneKey]
 	if !ok {
 		return
 	}
@@ -557,7 +602,7 @@ func (t *Config) DeleteZone(domain string) {
 		delete(t.Records, v)
 	}
 
-	delete(t.Domain, domain)
+	delete(t.Domain, zoneKey)
 
 	slog.Info("DeleteZone: removed zone from local DNS DB", "domain", domain)
 }
@@ -650,10 +695,14 @@ func zoneChanged(item s3types.Object, loaded Domain) bool {
 	return !item.LastModified.Equal(loaded.Modified)
 }
 
+// checkConfigDomainMatch rejects a zone file whose name disagrees with the
+// domain it declares. Compared case-insensitively: the two are the same DNS
+// name whatever their spelling, and rejecting the file outright would take the
+// zone offline rather than serve it under a canonical key.
 func checkConfigDomainMatch(filename string, domain string) (err error) {
 	filecheck := strings.Replace(filepath.Base(filename), ".toml", "", 1)
 
-	if filecheck != domain {
+	if !strings.EqualFold(filecheck, domain) {
 		err = fmt.Errorf("config file %s (%s) does not match domain entry %s", filename, filecheck, domain)
 	}
 

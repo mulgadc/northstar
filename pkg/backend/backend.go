@@ -98,7 +98,14 @@ func (h *Handler) serve(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) *
 		return &msg
 	}
 
+	// Two names, deliberately. domain is the question exactly as the client
+	// spelled it and is what every answer RR echoes back: DNS 0x20 resolvers
+	// (Google Public DNS among them) randomise the case on the way out and
+	// discard any reply whose case does not match, so normalising it here would
+	// make us unresolvable for them. lookupName is the canonical form and is the
+	// only thing that may be used as a map key or compared against stored state.
 	domain := msg.Question[0].Name
+	lookupName := config.CanonicalFQDN(domain)
 	qtype := r.Question[0].Qtype
 	qclass := r.Question[0].Qclass
 
@@ -123,10 +130,10 @@ func (h *Handler) serve(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) *
 	}
 
 	// Check if we are authoritative for this domain
-	zone, isAuth := h.Conf.FindZone(domain)
+	zone, isAuth := h.Conf.FindZone(lookupName)
 
 	// Lookup records
-	qq := config.DomainLookup{Domain: domain, Type: qtype, Class: qclass}
+	qq := config.DomainLookup{Domain: lookupName, Type: qtype, Class: qclass}
 	h.Conf.Mu.RLock()
 	records := make([]config.Records, len(h.Conf.Records[qq]))
 	copy(records, h.Conf.Records[qq])
@@ -134,7 +141,7 @@ func (h *Handler) serve(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) *
 
 	// If no exact match, try wildcard
 	if len(records) == 0 && isAuth {
-		wildcardName := wildcardFor(domain, zone)
+		wildcardName := wildcardFor(lookupName, zone)
 		if wildcardName != "" {
 			wq := config.DomainLookup{Domain: wildcardName, Type: qtype, Class: qclass}
 			h.Conf.Mu.RLock()
@@ -153,7 +160,7 @@ func (h *Handler) serve(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) *
 				return &msg
 			}
 			// We are authoritative: check if name exists with other types (NODATA vs NXDOMAIN)
-			if h.Conf.NameExists(domain) {
+			if h.Conf.NameExists(lookupName) {
 				// Name exists but no records for this type → NOERROR (NODATA)
 				msg.SetRcode(r, dns.RcodeSuccess)
 			} else {
@@ -344,6 +351,11 @@ func (h *Handler) serve(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) *
 }
 
 func (h *Handler) lookupExtra(address string, qtype uint16, qclass uint16) []dns.RR {
+	// Canonical because address is an RDATA target straight from a zone file,
+	// so its case is whatever the operator typed, while record keys are stored
+	// canonically. A mismatch here silently drops the glue rather than failing.
+	address = config.CanonicalFQDN(address)
+
 	// Lookup A records for the given address (glue records)
 	query := config.DomainLookup{Domain: address, Type: qtype, Class: qclass}
 	h.Conf.Mu.RLock()
@@ -352,13 +364,13 @@ func (h *Handler) lookupExtra(address string, qtype uint16, qclass uint16) []dns
 
 	var extra []dns.RR
 	for _, r := range records {
-		if r.Domain == address && r.Type == dns.TypeA {
+		if config.CanonicalFQDN(r.Domain) == address && r.Type == dns.TypeA {
 			extra = append(extra, &dns.A{
 				Hdr: dns.RR_Header{Name: r.Domain, Rrtype: dns.TypeA, Class: r.Class, Ttl: r.TTL},
 				A:   net.ParseIP(r.Address),
 			})
 		}
-		if r.Domain == address && r.Type == dns.TypeAAAA {
+		if config.CanonicalFQDN(r.Domain) == address && r.Type == dns.TypeAAAA {
 			extra = append(extra, &dns.AAAA{
 				Hdr:  dns.RR_Header{Name: r.Domain, Rrtype: dns.TypeAAAA, Class: r.Class, Ttl: r.TTL},
 				AAAA: net.ParseIP(r.Address),
@@ -371,7 +383,7 @@ func (h *Handler) lookupExtra(address string, qtype uint16, qclass uint16) []dns
 
 // addNSAuthority adds NS records to the authority section of the response.
 func (h *Handler) addNSAuthority(msg *dns.Msg, zone string, qclass uint16) {
-	zoneFQDN := zone + "."
+	zoneFQDN := config.CanonicalFQDN(zone)
 	nsLookup := config.DomainLookup{Domain: zoneFQDN, Type: dns.TypeNS, Class: qclass}
 
 	h.Conf.Mu.RLock()
@@ -392,7 +404,7 @@ func (h *Handler) lookupSOA(domain string) string {
 	h.Conf.Mu.RLock()
 	defer h.Conf.Mu.RUnlock()
 
-	soa := h.Conf.Domain[domain].SOA
+	soa := h.Conf.Domain[config.CanonicalZone(domain)].SOA
 	if soa == "" {
 		soa = fmt.Sprintf("ns.%s.", domain)
 	}
@@ -404,13 +416,13 @@ func (h *Handler) lookupSOA(domain string) string {
 func (h *Handler) SOA(domain string, zone string) dns.RR {
 	soaName := domain
 	if zone != "" {
-		soaName = zone + "."
+		soaName = config.CanonicalFQDN(zone)
 	}
 
 	// Use zone Modified timestamp for serial (monotonically increases on changes)
 	var serial uint32
 	h.Conf.Mu.RLock()
-	if d, ok := h.Conf.Domain[zone]; ok && !d.Modified.IsZero() {
+	if d, ok := h.Conf.Domain[config.CanonicalZone(zone)]; ok && !d.Modified.IsZero() {
 		serial = uint32(d.Modified.Unix()) //nolint:gosec // G115: SOA serial is uint32 per RFC 1035; second-resolution wrap is acceptable
 	}
 	h.Conf.Mu.RUnlock()
@@ -429,9 +441,15 @@ func (h *Handler) SOA(domain string, zone string) dns.RR {
 
 // wildcardFor returns the wildcard name for a given domain under a zone.
 // e.g., "foo.bar.example.com." under zone "example.com" → "*.example.com.".
+//
+// Both sides are canonicalised before the suffix test, which is a byte
+// comparison. Callers pass a canonical name and a canonical zone today, so this
+// is belt and braces — but it is the kind of byte comparison that survives only
+// as long as its two inputs happen to agree, which is how the case bug reached
+// production in the first place.
 func wildcardFor(name string, zone string) string {
-	zoneFQDN := zone + "."
-	if !strings.HasSuffix(name, zoneFQDN) {
+	zoneFQDN := config.CanonicalFQDN(zone)
+	if !strings.HasSuffix(config.CanonicalFQDN(name), zoneFQDN) {
 		return ""
 	}
 	return "*." + zoneFQDN

@@ -151,7 +151,7 @@ func ReadZoneRaw(s3cfg *S3Config, domain string) (ConfigArr, bool, error) {
 	svc := newS3Client(s3cfg)
 	out, err := svc.GetObject(context.TODO(), &s3.GetObjectInput{
 		Bucket: aws.String(s3cfg.Bucket),
-		Key:    aws.String(domain + ".toml"),
+		Key:    aws.String(zoneObjectKey(domain)),
 	})
 	if err != nil {
 		if isNotFound(err) {

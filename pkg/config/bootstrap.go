@@ -51,7 +51,7 @@ func ZoneExists(s3cfg *S3Config, domain string) (bool, error) {
 	svc := newS3Client(s3cfg)
 	_, err := svc.HeadObject(context.TODO(), &s3.HeadObjectInput{
 		Bucket: aws.String(s3cfg.Bucket),
-		Key:    aws.String(domain + ".toml"),
+		Key:    aws.String(zoneObjectKey(domain)),
 	})
 	if err != nil {
 		if isNotFound(err) {
@@ -72,7 +72,7 @@ func WriteZoneFile(s3cfg *S3Config, domain string, body []byte) error {
 	svc := newS3Client(s3cfg)
 	_, err := svc.PutObject(context.TODO(), &s3.PutObjectInput{
 		Bucket:      aws.String(s3cfg.Bucket),
-		Key:         aws.String(domain + ".toml"),
+		Key:         aws.String(zoneObjectKey(domain)),
 		Body:        bytes.NewReader(body),
 		ContentType: aws.String("application/toml"),
 	})
