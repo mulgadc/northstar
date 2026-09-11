@@ -124,8 +124,11 @@ func (s *Server) Reload() error {
 // instead of after the SyncInterval poll, and the cost is one zone fetch rather
 // than a full database rebuild.
 func (s *Server) ReloadZone(zone string) error {
-	zone = strings.TrimSuffix(strings.TrimSpace(zone), ".")
-	if zone == "" {
+	// Canonicalised because this becomes an S3 object key, and S3 keys are
+	// case-sensitive: a control-plane call naming the zone in any other case
+	// would miss the object and report a reload that never happened.
+	zone = config.CanonicalZone(strings.TrimSpace(zone))
+	if zone == "" || zone == "." {
 		return errors.New("reload zone: empty zone name")
 	}
 	path := s.cfg.ZoneSource() + "/" + zone + ".toml"
