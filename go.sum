@@ -49,8 +49,8 @@ github.com/klauspost/compress v1.19.2 h1:hMRETovs/pu/dVWN7zIT1PGG8t509MwT6bO7XSi
 github.com/klauspost/compress v1.19.2/go.mod h1:cwPg85FWrGar70rWktvGQj8/hthj3wpl0PGDogxkrSQ=
 github.com/miekg/dns v1.1.73 h1:uhT8nJxmTrPJYClxVxTCX+CVn6qnzSiybRk72Z6DgrE=
 github.com/miekg/dns v1.1.73/go.mod h1:RW2Obtfd5NZHvOFe3zYG0W8koWOQtAzyHaLo8vASBuQ=
-github.com/mulgadc/bluebottle v1.19.0 h1:KjaH4TbAAZAEfGVd47rgsBW4fLBm0eF3+kzE3mF95lo=
-github.com/mulgadc/bluebottle v1.19.0/go.mod h1:sg+gqQmHRdrS5ObBGfIRhl9sBvGbqMhLZElnC4otG/c=
+github.com/mulgadc/bluebottle v1.20.0 h1:Udi+aOA14CgDLfhanw4Rsa5HqkVt+/9e6mxoQWTRCNs=
+github.com/mulgadc/bluebottle v1.20.0/go.mod h1:4rjLL3B0xZBPmxacaXPkw6sPOZZgyuCDBFmPSOC81yE=
 github.com/pelletier/go-toml/v2 v2.4.3 h1:GTRvJQutkOSftxIFD5xw9aepkYNuPWmVJpffdDPYVpY=
 github.com/pelletier/go-toml/v2 v2.4.3/go.mod h1:2gIqNv+qfxSVS7cM2xJQKtLSTLUE9V8t9Stt+h56mCY=
 github.com/stretchr/objx v0.5.3 h1:jmXUvGomnU1o3W/V5h2VEradbpJDwGrzugQQvL0POH4=
