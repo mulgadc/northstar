@@ -105,6 +105,35 @@ func TestRemoveRecord(t *testing.T) {
 	assert.Empty(t, cfg.Records)
 }
 
+func TestSetRecordSetReplacesTheWholeRRset(t *testing.T) {
+	cfg := ConfigArr{Domain: Domain{Domain: "spinifex.internal"}}
+
+	// A single UpsertRecord for the same label/type would be limited to one
+	// address; SetRecordSet must be able to hold several at once.
+	assert.True(t, cfg.SetRecordSet("ec2.us-east-1.", TypeA, ClassIN, []string{"10.0.0.1", "10.0.0.2"}, 60))
+	require.Len(t, cfg.Records, 2)
+
+	// Re-applying the identical set reports no change and does not duplicate.
+	assert.False(t, cfg.SetRecordSet("ec2.us-east-1.", TypeA, ClassIN, []string{"10.0.0.1", "10.0.0.2"}, 60))
+	require.Len(t, cfg.Records, 2)
+
+	// Same set, different order: still no change (compared as a multiset).
+	assert.False(t, cfg.SetRecordSet("ec2.us-east-1.", TypeA, ClassIN, []string{"10.0.0.2", "10.0.0.1"}, 60))
+	require.Len(t, cfg.Records, 2)
+
+	// Dropping a node's address replaces the set rather than appending or
+	// leaving the stale address behind.
+	assert.True(t, cfg.SetRecordSet("ec2.us-east-1.", TypeA, ClassIN, []string{"10.0.0.1"}, 60))
+	require.Len(t, cfg.Records, 1)
+	assert.Equal(t, "10.0.0.1", cfg.Records[0].Address)
+
+	// A different label is untouched by a set write to another name.
+	cfg.UpsertRecord("api.", TypeA, ClassIN, "1.1.1.1", 60)
+	assert.True(t, cfg.SetRecordSet("ec2.us-east-1.", TypeA, ClassIN, []string{"10.0.0.5"}, 60))
+	require.Len(t, cfg.Records, 2)
+	assert.Contains(t, cfg.Records, Records{Domain: "api.", Type: TypeA, Class: ClassIN, Address: "1.1.1.1", TTL: 60})
+}
+
 func TestReadZoneRawRelativeLabels(t *testing.T) {
 	s3cfg, _ := mutableS3(t, "northstar")
 	seed := BaseZoneSeed{

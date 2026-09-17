@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -217,4 +218,58 @@ func (cfg *ConfigArr) RemoveRecord(label string, rtype uint16, value string) boo
 	}
 	cfg.Records = kept
 	return removed
+}
+
+// SetRecordSet replaces the RRset for (label, rtype) with exactly the given
+// addresses, unlike UpsertRecord which is fixed to a single record. It exists
+// for record classes whose desired answer is more than one address at once
+// (e.g. a name that must resolve to every cluster node's own gateway, rather
+// than to one resource that answers the same from anywhere). label is
+// relative to the zone (""= apex). Returns true if the resulting set differs
+// from what was there before.
+func (cfg *ConfigArr) SetRecordSet(label string, rtype, class uint16, addresses []string, ttl uint32) bool {
+	if class == 0 {
+		class = ClassIN
+	}
+	var old []Records
+	var rest []Records
+	for _, existing := range cfg.Records {
+		if strings.EqualFold(existing.Domain, label) && existing.Type == rtype {
+			old = append(old, existing)
+			continue
+		}
+		rest = append(rest, existing)
+	}
+
+	want := make([]Records, 0, len(addresses))
+	for _, addr := range addresses {
+		want = append(want, Records{Domain: label, Type: rtype, Class: class, Address: addr, TTL: ttl})
+	}
+
+	cfg.Records = append(rest, want...)
+	return !recordSetsEqual(old, want)
+}
+
+// recordSetsEqual compares two record sets for the same (label, type) as
+// multisets of (address, ttl), ignoring order: SetRecordSet rebuilds its
+// desired set deterministically each cycle, but existing on-disk order is not
+// guaranteed to match.
+func recordSetsEqual(a, b []Records) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	key := func(r Records) string { return r.Address + "\x00" + strconv.FormatUint(uint64(r.TTL), 10) }
+	counts := map[string]int{}
+	for _, r := range a {
+		counts[key(r)]++
+	}
+	for _, r := range b {
+		counts[key(r)]--
+	}
+	for _, c := range counts {
+		if c != 0 {
+			return false
+		}
+	}
+	return true
 }
