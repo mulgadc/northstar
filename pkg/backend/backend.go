@@ -1,3 +1,5 @@
+// Package backend answers DNS queries: authoritatively from the loaded zones,
+// and by forwarding to upstream resolvers for clients the recursion policy admits.
 package backend
 
 import (

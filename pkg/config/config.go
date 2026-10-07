@@ -1,3 +1,5 @@
+// Package config holds northstar's server configuration and its in-memory zone
+// database, loading, seeding and editing zones kept on disk or in S3.
 package config
 
 import (
