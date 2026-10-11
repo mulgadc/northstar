@@ -1,4 +1,4 @@
-FROM golang:1.27.0-alpine AS build-env
+FROM golang:1.27.2-alpine AS build-env
 
 # Build phase
 RUN apk add bash build-base git
