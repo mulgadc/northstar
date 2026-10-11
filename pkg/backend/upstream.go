@@ -222,8 +222,8 @@ func (u *Upstream) Resolve(ctx context.Context, name string, qtype uint16) ([]dn
 func serverNameFromAddr(addr string) string {
 	// Extract IP for TLS ServerName (strip port)
 	host := addr
-	if idx := strings.LastIndex(addr, ":"); idx != -1 {
-		host = addr[:idx]
+	if before, _, ok := strings.CutLast(addr, ":"); ok {
+		host = before
 	}
 	return host
 }
