@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -100,10 +101,17 @@ func TestServerLifecycle(t *testing.T) {
 }
 
 // fakeS3 serves ListObjectsV2 + GetObject for one zone file, path-style,
-// enough for Server.Reload against an s3:// zone source.
-func fakeS3(t *testing.T, bucket, key, body string) *httptest.Server {
+// enough for Server.Reload against an s3:// zone source. Setting fail makes
+// every request return a non-retryable error so the SDK fails without backoff.
+func fakeS3(t *testing.T, bucket, key, body string, fail *atomic.Bool) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if fail.Load() {
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><Error><Code>AccessDenied</Code><Message>Access Denied</Message></Error>`)
+			return
+		}
 		if r.URL.Query().Get("list-type") == "2" {
 			w.Header().Set("Content-Type", "application/xml")
 			fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?><ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>%s</Name><Contents><Key>%s</Key><LastModified>2022-05-27T07:32:00.000Z</LastModified><Size>%d</Size></Contents></ListBucketResult>`, bucket, key, len(body))
@@ -133,7 +141,8 @@ class = 1
 domain = ""
 address = "10.1.2.3"
 `
-	s3srv := fakeS3(t, "northstar", "example.test.toml", zone)
+	var s3Down atomic.Bool
+	s3srv := fakeS3(t, "northstar", "example.test.toml", zone, &s3Down)
 
 	addr := fmt.Sprintf("127.0.0.1:%d", freePort(t))
 	srv, err := server.NewServer(config.ServerConfig{
@@ -156,9 +165,9 @@ address = "10.1.2.3"
 	r := queryA(t, addr, "example.test")
 	require.Equal(t, dns.RcodeSuccess, r.Rcode)
 
-	// Transient S3 outage: Reload must return an error and keep serving the
-	// existing zone DB, not swap in an empty one.
-	s3srv.Close()
+	// S3 failure: Reload must return an error and keep serving the existing
+	// zone DB, not swap in an empty one.
+	s3Down.Store(true)
 	require.Error(t, srv.Reload())
 
 	r = queryA(t, addr, "example.test")

@@ -31,7 +31,7 @@ import (
 // genCert writes a self-signed cert/key pair to dir and returns their paths.
 func genCert(t *testing.T, dir string) (certPath, keyPath string) {
 	t.Helper()
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	key, err := rsa.GenerateKey(rand.Reader, 1024)
 	require.NoError(t, err)
 
 	tmpl := x509.Certificate{
@@ -184,6 +184,7 @@ func queryDoH(t *testing.T, addr, name string, qtype uint16) *dns.Msg {
 	client := &http.Client{Transport: &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}}
+	defer client.CloseIdleConnections()
 	url := "https://" + addr + "/dns-query"
 	resp, err := client.Post(url, "application/dns-message", bytes.NewReader(wire))
 	require.NoError(t, err)
@@ -209,6 +210,7 @@ func queryDoHGet(t *testing.T, addr, name string, qtype uint16) *dns.Msg {
 	client := &http.Client{Transport: &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}}
+	defer client.CloseIdleConnections()
 	resp, err := client.Get("https://" + addr + "/dns-query?dns=" + b64)
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -364,6 +366,8 @@ func TestDoHErrors(t *testing.T) {
 	client := &http.Client{Transport: &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}}
+	// Spare keep-alive conns stall server Shutdown for 5s; close them first.
+	t.Cleanup(client.CloseIdleConnections)
 	base := "https://" + dohAddr + "/dns-query"
 
 	// GET without the dns parameter → 400.
