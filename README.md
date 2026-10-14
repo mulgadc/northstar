@@ -15,13 +15,10 @@
 </p>
 
 <p align="center">
-  <a href="#why-northstar">Why Northstar?</a> ·
-  <a href="#quick-start">Quick start</a> ·
-  <a href="#protocol-and-record-support">Protocol support</a> ·
-  <a href="#architecture">Architecture</a> ·
+  <a href="#quick-start">Quick Start</a> ·
   <a href="#configuration">Configuration</a> ·
-  <a href="#zone-file-format">Zone files</a> ·
-  <a href="#spinifex-integration">Spinifex integration</a> ·
+  <a href="#zone-file-format">Zone Files</a> ·
+  <a href="#spinifex-integration">Spinifex Integration</a> ·
   <a href="#docker">Docker</a> ·
   <a href="#development">Development</a> ·
   <a href="#roadmap">Roadmap</a>
@@ -58,6 +55,7 @@ dig @127.0.0.1 hello_a.net A
 dig @127.0.0.1 hello_a.net A +tcp
 dig @127.0.0.1 hello_a.net A +edns=0
 ```
+
 ## Capabilities
 
 - Authoritative DNS over UDP and TCP
@@ -109,8 +107,6 @@ Optional upstream resolvers can be configured with TLS and failover for CNAME ch
 
 All configuration is via environment variables.
 
-### Core
-
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ZONE_DIR` | `config/domains/` | Path to zone files or `s3://bucket-name` |
@@ -118,30 +114,15 @@ All configuration is via environment variables.
 | `PORT` | `53` | Listen port (UDP + TCP) |
 | `NORTHSTAR_LOG_IGNORE` | | Suppress all logging |
 | `NORTHSTAR_LOG_DEBUG` | | Enable debug logging |
-
-### DNS-over-TLS
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `NORTHSTAR_TLS_CERT` | | Path to TLS certificate (PEM) |
-| `NORTHSTAR_TLS_KEY` | | Path to TLS private key |
-| `DOT_PORT` | `853` | DoT listener port |
-
-### S3 / S3-Compatible Storage
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `AWS_ACCESS_KEY` | | AWS access key ID |
-| `AWS_SECRET_ACCESS_KEY` | | AWS secret access key |
-| `AWS_REGION` | | AWS region |
+| `NORTHSTAR_TLS_CERT` | | Path to DNS-over-TLS certificate (PEM) |
+| `NORTHSTAR_TLS_KEY` | | Path to DNS-over-TLS private key |
+| `DOT_PORT` | `853` | DNS-over-TLS listener port |
+| `AWS_ACCESS_KEY` | | S3 access key ID |
+| `AWS_SECRET_ACCESS_KEY` | | S3 secret access key |
+| `AWS_REGION` | | S3 region |
 | `NORTHSTAR_S3_ENDPOINT` | | Custom S3 endpoint URL (for Predastore, MinIO, etc.) |
 | `NORTHSTAR_S3_INSECURE` | | Standalone environment mode only: skip S3 TLS certificate verification |
 | `S3_SYNC_RETRY` | `60` | S3 sync interval in seconds |
-
-### Upstream Resolvers
-
-| Variable | Default | Description |
-|----------|---------|-------------|
 | `NORTHSTAR_UPSTREAM` | `tls://1.1.1.1:853,tls://8.8.8.8:853,1.1.1.1:53` | Comma-separated upstream servers for CNAME chasing. Prefix with `tls://` for DNS-over-TLS. |
 
 ## Zone File Format
