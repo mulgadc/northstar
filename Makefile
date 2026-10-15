@@ -1,5 +1,5 @@
 GO_PROJECT_NAME := northstar
-DOCKER_IMAGE := calacode/northstar-dns
+DOCKER_IMAGE := ghcr.io/mulgadc/northstar
 SHELL := /bin/bash
 
 export GOFIPS140 := v1.0.0

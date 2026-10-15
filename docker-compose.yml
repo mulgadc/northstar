@@ -8,4 +8,4 @@ services:
           AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY}"
           ZONE_DIR: "${ZONE_DIR}"
           AWS_REGION: "${AWS_REGION}"    
-      image: "calacode/northstar-dns:latest"
+      image: "ghcr.io/mulgadc/northstar:latest"

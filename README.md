@@ -19,7 +19,6 @@
   <a href="#configuration">Configuration</a> ·
   <a href="#zone-file-format">Zone Files</a> ·
   <a href="#spinifex-integration">Spinifex Integration</a> ·
-  <a href="#docker">Docker</a> ·
   <a href="#development">Development</a> ·
   <a href="#roadmap">Roadmap</a>
 </p>
@@ -267,37 +266,6 @@ AWS_ACCESS_KEY="..." \
 AWS_SECRET_ACCESS_KEY="..." \
 AWS_REGION="us-west-1" \
 ./bin/northstar
-```
-
-## Docker
-
-**Docker Compose (S3):**
-
-```sh
-AWS_ACCESS_KEY="X" AWS_SECRET_ACCESS_KEY="Y" ZONE_DIR="s3://my-bucket" AWS_REGION="us-west-1" docker compose up -d
-```
-
-**Standalone (filesystem):**
-
-```sh
-docker run \
-  --mount src=./config/domains,target=/config/domains,type=bind \
-  -e ZONE_DIR="/config/domains" \
-  -p 53:53/udp -p 53:53/tcp \
-  calacode/northstar-dns
-```
-
-**With DNS-over-TLS:**
-
-```sh
-docker run \
-  --mount src=./config/domains,target=/config/domains,type=bind \
-  --mount src=./certs,target=/certs,type=bind \
-  -e ZONE_DIR="/config/domains" \
-  -e NORTHSTAR_TLS_CERT="/certs/server.pem" \
-  -e NORTHSTAR_TLS_KEY="/certs/server.key" \
-  -p 53:53/udp -p 53:53/tcp -p 853:853/tcp \
-  calacode/northstar-dns
 ```
 
 ## Development
