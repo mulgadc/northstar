@@ -2,7 +2,9 @@ version: 2
 updates:
   - package-ecosystem: gomod
     target-branch: dev
-    directory: /
+    directories:
+      - /
+      - /e2e
     schedule:
       interval: weekly
       day: sunday
@@ -30,5 +32,31 @@ updates:
           - "version-update:semver-patch"
     groups:
       github-actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: docker
+    target-branch: dev
+    directory: /
+    schedule:
+      interval: weekly
+      day: sunday
+      timezone: Australia/Sydney
+    cooldown:
+      default-days: 3
+    # The golang and alpine versions are deliberate; only their digests move here.
+    ignore:
+      - dependency-name: golang
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
+      - dependency-name: alpine
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
+    groups:
+      docker-images:
         patterns:
           - "*"
