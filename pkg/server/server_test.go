@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"context"
+	"crypto/md5"
 	"fmt"
 	"net"
 	"net/http"
@@ -118,6 +119,7 @@ func fakeS3(t *testing.T, bucket, key, body string, fail *atomic.Bool) *httptest
 			return
 		}
 		if strings.TrimPrefix(r.URL.Path, "/"+bucket+"/") == key {
+			w.Header().Set("ETag", fmt.Sprintf("%q", fakeETag(body)))
 			w.Header().Set("Content-Length", strconv.Itoa(len(body)))
 			_, _ = w.Write([]byte(body))
 			return
@@ -126,6 +128,31 @@ func fakeS3(t *testing.T, bucket, key, body string, fail *atomic.Bool) *httptest
 	}))
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+func fakeETag(body string) string {
+	return fmt.Sprintf("%x", md5.Sum([]byte(body)))
+}
+
+// The per-zone reload reports the version it loaded, so the control plane can
+// tell its own write is being served rather than an older copy.
+func TestReloadZoneVersionReportsLoadedETag(t *testing.T) {
+	zone := "version = 1.0\n[domain]\ndomain = \"example.test\"\n[[records]]\ndomain = \"\"\naddress = \"10.1.2.3\"\n"
+	var s3Down atomic.Bool
+	s3srv := fakeS3(t, "northstar", "example.test.toml", zone, &s3Down)
+	srv, err := server.NewServer(config.ServerConfig{
+		Listen:       fmt.Sprintf("127.0.0.1:%d", freePort(t)),
+		SyncInterval: 3600,
+		S3:           config.S3Config{Endpoint: s3srv.URL, Region: "us-east-1", Bucket: "northstar", AccessKey: "AKIATEST", SecretKey: "secret"},
+	})
+	require.NoError(t, err)
+
+	etag, err := srv.ReloadZoneVersion("Example.Test")
+	require.NoError(t, err)
+	assert.Equal(t, fakeETag(zone), etag)
+
+	_, err = srv.ReloadZoneVersion("missing.test")
+	require.Error(t, err)
 }
 
 func TestServerReloadFailureKeepsZones(t *testing.T) {
