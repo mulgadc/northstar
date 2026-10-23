@@ -54,6 +54,9 @@ func mutableS3(t *testing.T, bucket string) (*S3Config, map[string]string) {
 			} else {
 				w.WriteHeader(http.StatusNotFound)
 			}
+		case http.MethodDelete:
+			delete(objects, key)
+			w.WriteHeader(http.StatusNoContent)
 		case http.MethodPut:
 			body, _ := io.ReadAll(r.Body)
 			objects[key] = string(body)
@@ -142,6 +145,17 @@ func TestEnsureBaseZoneCreatesThenIdempotent(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, created)
 	assert.Equal(t, original, objects["spx3.net.toml"])
+}
+
+func TestDeleteZoneFileRemovesTheZone(t *testing.T) {
+	s3cfg, objects := mutableS3(t, "northstar")
+	require.NoError(t, WriteZoneFile(s3cfg, "Example.COM", []byte("version = 1.0\n")))
+	require.Contains(t, objects, "example.com.toml")
+
+	require.NoError(t, DeleteZoneFile(s3cfg, "example.com."))
+	assert.NotContains(t, objects, "example.com.toml")
+	require.NoError(t, DeleteZoneFile(s3cfg, "example.com"), "deleting an absent zone succeeds")
+	require.Error(t, DeleteZoneFile(nil, "example.com"))
 }
 
 // responseError wraps err in the transport shape the v2 client returns, pairing
