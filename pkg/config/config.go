@@ -269,86 +269,8 @@ func (config *Config) MonitorConfig(ctx context.Context, zone_dir string, s3cfg 
 
 			slog.Debug("MonitorConfig: S3 check sync state")
 
-			path := strings.Split(zone_dir, "s3://")
-
-			if len(path) < 2 {
-				slog.Error("MonitorConfig: invalid s3:// zone_dir", "zone_dir", zone_dir)
-				return
-			}
-
-			resp, err := svc.ListObjectsV2(ctx, &s3.ListObjectsV2Input{Bucket: aws.String(path[1])})
-
-			if err != nil {
-				slog.Warn("MonitorConfig: unable to list bucket", "bucket", path[1], "error", err)
-				continue
-			}
-
-			configsync := make(map[string]bool, 10)
-
-			for _, item := range resp.Contents {
-				slog.Debug("MonitorConfig: scanning", "key", *item.Key)
-
-				if !strings.HasSuffix(*item.Key, ".toml") {
-					continue
-				}
-
-				domain := strings.Replace(*item.Key, ".toml", "", 1)
-				configsync[domain] = true
-
-				config.Mu.RLock()
-				_, ok := config.Domain[domain]
-				config.Mu.RUnlock()
-
-				if !ok {
-					myconfig, err := ReadZone(fmt.Sprintf("%s/%s", zone_dir, *item.Key), *item.LastModified, s3cfg)
-
-					if err != nil {
-						slog.Warn("MonitorConfig: read zone failed", "key", *item.Key, "error", err)
-						continue
-					}
-
-					if err := checkConfigDomainMatch(*item.Key, myconfig.Domain.Domain); err == nil {
-						config.AddZone(myconfig)
-					} else {
-						slog.Error("MonitorConfig: domain and config file mismatch, entry skipped", "domain", domain, "key", *item.Key, "error", err)
-					}
-				}
-
-				config.Mu.RLock()
-				domainEntry, exists := config.Domain[domain]
-				config.Mu.RUnlock()
-
-				if exists && zoneChanged(item, domainEntry) {
-					slog.Info("MonitorConfig: new config file detected, reloading", "key", *item.Key)
-
-					myconfig, err := ReadZone(fmt.Sprintf("%s/%s", zone_dir, *item.Key), *item.LastModified, s3cfg)
-
-					if err != nil {
-						slog.Warn("MonitorConfig: read zone failed", "key", *item.Key, "error", err)
-						continue
-					}
-
-					if err := checkConfigDomainMatch(*item.Key, myconfig.Domain.Domain); err == nil {
-						config.ReplaceZone(myconfig)
-					} else {
-						slog.Error("MonitorConfig: domain and config file mismatch, entry skipped", "domain", domain, "key", *item.Key, "error", err)
-					}
-				}
-			}
-
-			// Purge domains no longer on S3
-			config.Mu.RLock()
-			var toDelete []string
-			for domain := range config.Domain {
-				if _, ok := configsync[domain]; !ok {
-					toDelete = append(toDelete, domain)
-				}
-			}
-			config.Mu.RUnlock()
-
-			for _, domain := range toDelete {
-				slog.Debug("MonitorConfig: delete check", "domain", domain)
-				config.DeleteZone(domain)
+			if err := config.syncS3(ctx, svc, zone_dir, s3cfg); err != nil {
+				slog.Warn("MonitorConfig: S3 sync skipped", "zone_dir", zone_dir, "error", err)
 			}
 		}
 	}
@@ -409,6 +331,93 @@ func (config *Config) MonitorConfig(ctx context.Context, zone_dir string, s3cfg 
 	}
 
 	<-ctx.Done()
+}
+
+// listZoneObjects returns every object in the bucket, following continuation
+// tokens. It fails on any page error, so callers never act on a partial listing.
+func listZoneObjects(ctx context.Context, svc s3.ListObjectsV2APIClient, bucket string) ([]s3types.Object, error) {
+	var objects []s3types.Object
+	pager := s3.NewListObjectsV2Paginator(svc, &s3.ListObjectsV2Input{Bucket: aws.String(bucket)})
+	for pager.HasMorePages() {
+		page, err := pager.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("list bucket %s: %w", bucket, err)
+		}
+		objects = append(objects, page.Contents...)
+	}
+	return objects, nil
+}
+
+// syncS3 performs one S3 reconcile pass: load new zones, reload changed ones,
+// then purge zones no longer in the bucket. The purge runs only against a
+// complete listing; a failed listing leaves the loaded zones untouched.
+func (config *Config) syncS3(ctx context.Context, svc s3.ListObjectsV2APIClient, zone_dir string, s3cfg *S3Config) error {
+	path := strings.Split(zone_dir, "s3://")
+	if len(path) < 2 || path[1] == "" {
+		return fmt.Errorf("invalid s3:// zone_dir %q", zone_dir)
+	}
+
+	objects, err := listZoneObjects(ctx, svc, path[1])
+	if err != nil {
+		return err
+	}
+
+	configsync := make(map[string]bool, len(objects))
+
+	for _, item := range objects {
+		slog.Debug("MonitorConfig: scanning", "key", *item.Key)
+
+		if !strings.HasSuffix(*item.Key, ".toml") {
+			continue
+		}
+
+		domain := strings.Replace(*item.Key, ".toml", "", 1)
+		configsync[domain] = true
+
+		config.Mu.RLock()
+		domainEntry, exists := config.Domain[domain]
+		config.Mu.RUnlock()
+
+		if exists && !zoneChanged(item, domainEntry) {
+			continue
+		}
+
+		if exists {
+			slog.Info("MonitorConfig: new config file detected, reloading", "key", *item.Key)
+		}
+
+		myconfig, err := ReadZone(fmt.Sprintf("%s/%s", zone_dir, *item.Key), *item.LastModified, s3cfg)
+		if err != nil {
+			slog.Warn("MonitorConfig: read zone failed", "key", *item.Key, "error", err)
+			continue
+		}
+
+		if err := checkConfigDomainMatch(*item.Key, myconfig.Domain.Domain); err != nil {
+			slog.Error("MonitorConfig: domain and config file mismatch, entry skipped", "domain", domain, "key", *item.Key, "error", err)
+			continue
+		}
+
+		if exists {
+			config.ReplaceZone(myconfig)
+		} else {
+			config.AddZone(myconfig)
+		}
+	}
+
+	config.Mu.RLock()
+	var toDelete []string
+	for domain := range config.Domain {
+		if !configsync[domain] {
+			toDelete = append(toDelete, domain)
+		}
+	}
+	config.Mu.RUnlock()
+
+	for _, domain := range toDelete {
+		slog.Debug("MonitorConfig: delete check", "domain", domain)
+		config.DeleteZone(domain)
+	}
+	return nil
 }
 
 func ApplyDefaults(config *ConfigArr, lastModified time.Time) {
@@ -495,12 +504,12 @@ func ReadZoneFiles(zone_dir string, s3cfg *S3Config) (*Config, error) {
 			return nil, fmt.Errorf("invalid s3:// zone_dir %q", zone_dir)
 		}
 
-		resp, err := svc.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{Bucket: aws.String(path[1])})
+		objects, err := listZoneObjects(context.TODO(), svc, path[1])
 		if err != nil {
-			return nil, fmt.Errorf("list bucket %s: %w", path[1], err)
+			return nil, err
 		}
 
-		for _, item := range resp.Contents {
+		for _, item := range objects {
 			if strings.HasSuffix(*item.Key, ".toml") {
 				myconfig, err := ReadZone(fmt.Sprintf("%s/%s", zone_dir, *item.Key), *item.LastModified, s3cfg)
 
