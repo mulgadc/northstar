@@ -75,6 +75,10 @@ type Records struct {
 	// CAA record fields (RFC 8659)
 	CAAFlag uint8  `toml:"caa_flag"`
 	CAATag  string `toml:"caa_tag"`
+	// Strings holds a TXT record's character-strings in presentation format
+	// (\" \\ \ddd escapes), each at most 255 bytes once decoded. Address is
+	// ignored when it is set.
+	Strings []string `toml:"strings,omitempty"`
 }
 
 type DomainLookup struct {
@@ -643,6 +647,9 @@ func ReadZone(zone_file string, lastModified time.Time, s3cfg *S3Config) (myconf
 		})
 
 		if err != nil {
+			if isNotFound(err) {
+				return myconfig, fmt.Errorf("download %s: %w: %w", zone_file, ErrZoneNotFound, err)
+			}
 			return myconfig, fmt.Errorf("download %s: %w", zone_file, err)
 		}
 		defer func() { _ = out.Body.Close() }()
@@ -672,6 +679,9 @@ func ReadZone(zone_file string, lastModified time.Time, s3cfg *S3Config) (myconf
 	} else {
 		file, err := os.ReadFile(zone_file)
 
+		if errors.Is(err, os.ErrNotExist) {
+			return myconfig, fmt.Errorf("error reading %s: %w: %w", zone_file, ErrZoneNotFound, err)
+		}
 		if err != nil {
 			return myconfig, fmt.Errorf("error reading %s: %w", zone_file, err)
 		}

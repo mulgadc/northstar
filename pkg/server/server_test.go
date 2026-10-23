@@ -151,8 +151,34 @@ func TestReloadZoneVersionReportsLoadedETag(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, fakeETag(zone), etag)
 
-	_, err = srv.ReloadZoneVersion("missing.test")
-	require.Error(t, err)
+	etag, err = srv.ReloadZoneVersion("missing.test")
+	require.NoError(t, err, "a missing object is a withdrawal, not a failure")
+	assert.Empty(t, etag)
+
+	s3Down.Store(true)
+	_, err = srv.ReloadZoneVersion("example.test")
+	require.Error(t, err, "a backend that cannot answer must not read as a deletion")
+}
+
+// Reloading a zone whose object was deleted stops serving it immediately.
+func TestReloadZoneVersionWithdrawsADeletedZone(t *testing.T) {
+	dir := t.TempDir()
+	writeZone(t, dir, "example.test", "10.1.2.3")
+	addr := fmt.Sprintf("127.0.0.1:%d", freePort(t))
+	srv, err := server.NewServer(config.ServerConfig{Listen: addr, ZoneDir: dir, SyncInterval: 3600})
+	require.NoError(t, err)
+	require.NoError(t, srv.Start(context.Background()))
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+	require.Eventually(t, func() bool { return queryA(t, addr, "example.test").Authoritative }, 2*time.Second, 10*time.Millisecond)
+
+	require.NoError(t, os.Remove(filepath.Join(dir, "example.test.toml")))
+	etag, err := srv.ReloadZoneVersion("example.test")
+	require.NoError(t, err)
+	assert.Empty(t, etag)
+
+	r := queryA(t, addr, "example.test")
+	assert.False(t, r.Authoritative, "a withdrawn zone must not be answered authoritatively")
+	assert.Empty(t, r.Answer)
 }
 
 func TestServerReloadFailureKeepsZones(t *testing.T) {

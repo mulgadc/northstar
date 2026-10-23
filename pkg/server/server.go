@@ -141,6 +141,12 @@ func (s *Server) ReloadZoneVersion(zone string) (string, error) {
 	}
 	path := s.cfg.ZoneSource() + "/" + zone + ".toml"
 	fresh, err := config.ReadZone(path, time.Now(), s.cfg.S3Pointer())
+	if errors.Is(err, config.ErrZoneNotFound) {
+		// A deleted object is withdrawn now rather than at the next poll, and
+		// the empty version tells the caller nothing is served.
+		s.zoneDB.DeleteZone(zone)
+		return "", nil
+	}
 	if err != nil {
 		return "", fmt.Errorf("reload zone %s: %w", zone, err)
 	}
