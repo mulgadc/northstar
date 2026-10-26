@@ -124,20 +124,34 @@ func (s *Server) Reload() error {
 // instead of after the SyncInterval poll, and the cost is one zone fetch rather
 // than a full database rebuild.
 func (s *Server) ReloadZone(zone string) error {
+	_, err := s.ReloadZoneVersion(zone)
+	return err
+}
+
+// ReloadZoneVersion reloads zone as ReloadZone does and returns the version
+// now being served: the source object's ETag, or "" for a zone read from disk.
+// A caller that wrote the zone compares it with its own write's ETag.
+func (s *Server) ReloadZoneVersion(zone string) (string, error) {
 	// Canonicalised because this becomes an S3 object key, and S3 keys are
 	// case-sensitive: a control-plane call naming the zone in any other case
 	// would miss the object and report a reload that never happened.
 	zone = config.CanonicalZone(strings.TrimSpace(zone))
 	if zone == "" || zone == "." {
-		return errors.New("reload zone: empty zone name")
+		return "", errors.New("reload zone: empty zone name")
 	}
 	path := s.cfg.ZoneSource() + "/" + zone + ".toml"
 	fresh, err := config.ReadZone(path, time.Now(), s.cfg.S3Pointer())
+	if errors.Is(err, config.ErrZoneNotFound) {
+		// A deleted object is withdrawn now rather than at the next poll, and
+		// the empty version tells the caller nothing is served.
+		s.zoneDB.DeleteZone(zone)
+		return "", nil
+	}
 	if err != nil {
-		return fmt.Errorf("reload zone %s: %w", zone, err)
+		return "", fmt.Errorf("reload zone %s: %w", zone, err)
 	}
 	s.zoneDB.ReplaceZone(fresh)
-	return nil
+	return fresh.Domain.ETag, nil
 }
 
 // Shutdown stops the sync loop and all listeners.

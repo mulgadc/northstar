@@ -427,3 +427,13 @@ func TestReloadZoneEmptyName(t *testing.T) {
 	srv, _, _, _ := startServer(t, dir, nil)
 	require.Error(t, srv.ReloadZone("  "))
 }
+
+// A zone read from disk has no object version to report.
+func TestReloadZoneVersionFromDiskIsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	writeZone(t, dir, "host.spx3.net", "10.0.0.5")
+	srv, _, _, _ := startServer(t, dir, nil)
+	etag, err := srv.ReloadZoneVersion("host.spx3.net")
+	require.NoError(t, err)
+	assert.Empty(t, etag)
+}

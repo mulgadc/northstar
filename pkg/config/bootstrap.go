@@ -79,6 +79,21 @@ func WriteZoneFile(s3cfg *S3Config, domain string, body []byte) error {
 	return err
 }
 
+// DeleteZoneFile removes <domain>.toml from the bucket. Deleting an absent
+// zone succeeds, as S3 DeleteObject does.
+func DeleteZoneFile(s3cfg *S3Config, domain string) error {
+	if s3cfg == nil || s3cfg.Bucket == "" {
+		return errors.New("s3 config with bucket required")
+	}
+
+	svc := newS3Client(s3cfg)
+	_, err := svc.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+		Bucket: aws.String(s3cfg.Bucket),
+		Key:    aws.String(zoneObjectKey(domain)),
+	})
+	return err
+}
+
 // EnsureBaseZone creates <domain>.toml from seed when it is not already present
 // in the bucket. It never overwrites an existing zone (record management is the
 // control plane's job). Returns true when it created the zone.

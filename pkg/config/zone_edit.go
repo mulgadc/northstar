@@ -26,6 +26,10 @@ const (
 // apart from "the backend is unreachable, leave the zone alone".
 var ErrZoneCorrupt = errors.New("zone object is corrupt")
 
+// ErrZoneNotFound marks a zone whose object does not exist, as distinct from a
+// backend that could not be asked.
+var ErrZoneNotFound = errors.New("zone object not found")
+
 // NewZoneConfig builds an in-memory zone (relative-label records, before
 // ApplyDefaults) from a seed: apex SOA/NS with glue A records plus TXT markers.
 // RenderBaseZone and the on-demand zone creation path both use it.
@@ -93,7 +97,7 @@ func RenderZone(cfg ConfigArr) ([]byte, error) {
 	var b strings.Builder
 	b.WriteString("version = 1.0\n")
 	b.WriteString("[domain]\n")
-	fmt.Fprintf(&b, "domain = %q\n", cfg.Domain.Domain)
+	fmt.Fprintf(&b, "domain = %s\n", tomlString(cfg.Domain.Domain))
 	modified := cfg.Domain.Modified
 	if modified.IsZero() {
 		modified = time.Now().UTC()
@@ -101,7 +105,7 @@ func RenderZone(cfg ConfigArr) ([]byte, error) {
 	fmt.Fprintf(&b, "modified = %s\n", modified.UTC().Format(time.RFC3339))
 	b.WriteString("active = true\n")
 	if cfg.Domain.SOA != "" {
-		fmt.Fprintf(&b, "soa = %q\n", cfg.Domain.SOA)
+		fmt.Fprintf(&b, "soa = %s\n", tomlString(cfg.Domain.SOA))
 	}
 	b.WriteString("[defaults]\n")
 	fmt.Fprintf(&b, "ttl = %d\n", ttl)
@@ -110,7 +114,7 @@ func RenderZone(cfg ConfigArr) ([]byte, error) {
 
 	for _, rec := range cfg.Records {
 		b.WriteString("[[records]]\n")
-		fmt.Fprintf(&b, "domain = %q\n", rec.Domain)
+		fmt.Fprintf(&b, "domain = %s\n", tomlString(rec.Domain))
 		fmt.Fprintf(&b, "type = %d\n", rec.Type)
 		if rec.Class != 0 {
 			fmt.Fprintf(&b, "class = %d\n", rec.Class)
@@ -119,10 +123,17 @@ func RenderZone(cfg ConfigArr) ([]byte, error) {
 			fmt.Fprintf(&b, "ttl = %d\n", rec.TTL)
 		}
 		if rec.Root != "" {
-			fmt.Fprintf(&b, "root = %q\n", rec.Root)
+			fmt.Fprintf(&b, "root = %s\n", tomlString(rec.Root))
 		}
 		if rec.Address != "" {
-			fmt.Fprintf(&b, "address = %q\n", rec.Address)
+			fmt.Fprintf(&b, "address = %s\n", tomlString(rec.Address))
+		}
+		if len(rec.Strings) > 0 {
+			quoted := make([]string, len(rec.Strings))
+			for i, str := range rec.Strings {
+				quoted[i] = tomlString(str)
+			}
+			fmt.Fprintf(&b, "strings = [%s]\n", strings.Join(quoted, ", "))
 		}
 		switch rec.Type {
 		case 15: // MX
@@ -133,11 +144,41 @@ func RenderZone(cfg ConfigArr) ([]byte, error) {
 			fmt.Fprintf(&b, "port = %d\n", rec.Port)
 		case 257: // CAA
 			fmt.Fprintf(&b, "caa_flag = %d\n", rec.CAAFlag)
-			fmt.Fprintf(&b, "caa_tag = %q\n", rec.CAATag)
+			fmt.Fprintf(&b, "caa_tag = %s\n", tomlString(rec.CAATag))
 		}
 	}
 
 	return []byte(b.String()), nil
+}
+
+// tomlString quotes s as a TOML basic string. Go's %q is not a substitute: it
+// writes \x escapes, which TOML rejects, so a control byte in a record value
+// would make the whole zone unparseable.
+func tomlString(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		switch r {
+		case '"':
+			b.WriteString(`\"`)
+		case '\\':
+			b.WriteString(`\\`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\t':
+			b.WriteString(`\t`)
+		case '\r':
+			b.WriteString(`\r`)
+		default:
+			if r < 0x20 || r == 0x7f {
+				fmt.Fprintf(&b, `\u%04X`, r)
+			} else {
+				b.WriteRune(r)
+			}
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
 }
 
 // ReadZoneRaw downloads <domain>.toml and parses it WITHOUT applying defaults,

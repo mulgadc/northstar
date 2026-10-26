@@ -303,6 +303,19 @@ address = "10.10.10.50"
 	f, _ = os.Create("testconfig/wildcard.net.toml")
 	f.WriteString(wildcardZone)
 	f.Close()
+
+	// Rendered rather than hand-written, so the TOML quoting is exercised too.
+	txtZone, err := config.RenderZone(config.ConfigArr{
+		Domain: config.Domain{Domain: "txtstrings.net"},
+		Records: []config.Records{
+			{Domain: "dkim.", Type: dns.TypeTXT, Strings: []string{strings.Repeat("a", 255), "tail"}},
+			{Domain: "quoted.", Type: dns.TypeTXT, Address: `say \"hi\" \\ \001`},
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+	_ = os.WriteFile("testconfig/txtstrings.net.toml", txtZone, 0o644)
 }
 
 func startTestServer() {
@@ -579,6 +592,25 @@ func TestCAARecord(t *testing.T) {
 		assert.Equal(t, "letsencrypt.org", caaRecords[0].Value)
 		assert.Equal(t, "issuewild", caaRecords[1].Tag)
 	}
+}
+
+// A TXT value longer than one character-string is served as the strings it
+// was stored as. Values are DNS presentation format, so escapes survive the
+// zone file and reach the wire as the bytes they name.
+func TestTXTRecordStrings(t *testing.T) {
+	c := dns.Client{Net: "tcp"}
+	m := dns.Msg{}
+	m.SetQuestion("dkim.txtstrings.net.", dns.TypeTXT)
+	r, _, err := c.Exchange(&m, testNS)
+	require.NoError(t, err)
+	require.Len(t, r.Answer, 1)
+	assert.Equal(t, []string{strings.Repeat("a", 255), "tail"}, r.Answer[0].(*dns.TXT).Txt)
+
+	m.SetQuestion("quoted.txtstrings.net.", dns.TypeTXT)
+	r, _, err = c.Exchange(&m, testNS)
+	require.NoError(t, err)
+	require.Len(t, r.Answer, 1)
+	assert.Equal(t, []string{`say \"hi\" \\ \001`}, r.Answer[0].(*dns.TXT).Txt)
 }
 
 // --- PTR Record Tests ---

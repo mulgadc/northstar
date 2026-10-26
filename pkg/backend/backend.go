@@ -262,7 +262,7 @@ func (h *Handler) serve(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) *
 			if record.Type == dns.TypeTXT {
 				msg.Answer = append(msg.Answer, &dns.TXT{
 					Hdr: dns.RR_Header{Name: domain, Rrtype: dns.TypeTXT, Class: record.Class, Ttl: record.TTL},
-					Txt: []string{record.Address},
+					Txt: txtStrings(record),
 				})
 			}
 
@@ -439,6 +439,14 @@ func (h *Handler) SOA(domain string, zone string) dns.RR {
 		Expire:  604800,
 		Minttl:  60,
 	}
+}
+
+// txtStrings returns a TXT record's character-strings.
+func txtStrings(record *config.Records) []string {
+	if len(record.Strings) > 0 {
+		return record.Strings
+	}
+	return []string{record.Address}
 }
 
 // wildcardFor returns the wildcard name for a given domain under a zone.
