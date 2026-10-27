@@ -103,7 +103,10 @@ func aclHandler(t *testing.T, policy *backend.RecursionPolicy) (*backend.Handler
 	}
 	zoneDB.Domain["acl.test"] = config.Domain{}
 	zoneDB.Records[config.DomainLookup{Domain: "host.acl.test.", Type: dns.TypeA, Class: dns.ClassINET}] = []config.Records{
-		{Type: dns.TypeA, Class: dns.ClassINET, TTL: 60, Address: "10.1.2.3"},
+		{Type: dns.TypeA, Class: dns.ClassINET, TTL: 60, Address: "10.1.2.3", Zone: "acl.test"},
+	}
+	zoneDB.Records[config.DomainLookup{Domain: "alias.acl.test.", Type: dns.TypeCNAME, Class: dns.ClassINET}] = []config.Records{
+		{Type: dns.TypeCNAME, Class: dns.ClassINET, TTL: 60, Address: "www.example.com.", Zone: "acl.test"},
 	}
 
 	upstream := backend.NewUpstream(backend.ParseUpstreamServers([]string{up.addr}))
@@ -164,6 +167,25 @@ func TestAuthoritativeStillServedToUntrustedSource(t *testing.T) {
 	assert.True(t, resp.Authoritative)
 	require.Len(t, resp.Answer, 1)
 	assert.Equal(t, "10.1.2.3", resp.Answer[0].(*dns.A).A.String())
+}
+
+// A stub resolver does not follow CNAMEs, so a client allowed recursion gets
+// the out-of-zone target resolved; any other client gets the CNAME alone.
+func TestCNAMEToOutOfZoneTargetFollowsRecursionPolicy(t *testing.T) {
+	h, up := aclHandler(t, trustedPolicy(t, "72.52.77.228/32"))
+
+	resp := query(t, h, "alias.acl.test", udpFrom(t, "72.52.77.228"))
+	assert.Equal(t, dns.RcodeSuccess, resp.Rcode)
+	require.Len(t, resp.Answer, 2)
+	assert.Equal(t, "www.example.com.", resp.Answer[0].(*dns.CNAME).Target)
+	assert.Equal(t, "203.0.113.1", resp.Answer[1].(*dns.A).A.String())
+	assert.True(t, up.forwarded())
+
+	resp = query(t, h, "alias.acl.test", udpFrom(t, "198.51.100.7"))
+	assert.Equal(t, dns.RcodeSuccess, resp.Rcode)
+	require.Len(t, resp.Answer, 1)
+	assert.IsType(t, &dns.CNAME{}, resp.Answer[0])
+	assert.False(t, up.forwarded(), "untrusted client's CNAME target must not be forwarded")
 }
 
 func TestNXDOMAINStillServedToUntrustedSource(t *testing.T) {

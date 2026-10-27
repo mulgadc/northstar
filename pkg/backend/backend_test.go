@@ -316,6 +316,40 @@ address = "10.10.10.50"
 		panic(err)
 	}
 	_ = os.WriteFile("testconfig/txtstrings.net.toml", txtZone, 0o644)
+
+	// A parent delegating child.deleg.net, and the child zone itself.
+	writeRenderedZone("deleg.net", config.ConfigArr{
+		Domain: config.Domain{Domain: "deleg.net", SOA: "ns1.deleg.net."},
+		Records: []config.Records{
+			{Domain: "", Type: dns.TypeNS, TTL: 300, Address: "ns1.deleg.net."},
+			{Domain: "ns1.", Type: dns.TypeA, TTL: 300, Address: "10.20.0.1"},
+			{Domain: "child.", Type: dns.TypeNS, TTL: 60, Address: "ns1.deleg.net."},
+		},
+	})
+	writeRenderedZone("child.deleg.net", config.ConfigArr{
+		Domain: config.Domain{
+			Domain: "child.deleg.net", SOA: "ns1.deleg.net.",
+			SOARecord: "ns1.deleg.net. hostmaster.deleg.net. 1 7200 900 1209600 86400", SOATTL: 900,
+		},
+		Records: []config.Records{
+			{Domain: "", Type: dns.TypeNS, TTL: 172800, Address: "ns1.deleg.net."},
+			{Domain: "alias.", Type: dns.TypeCNAME, TTL: 60, Address: "www.child.deleg.net"},
+			{Domain: "hop.", Type: dns.TypeCNAME, TTL: 60, Address: "alias.child.deleg.net."},
+			{Domain: "www.", Type: dns.TypeA, TTL: 60, Address: "10.20.0.80"},
+			{Domain: "away.", Type: dns.TypeCNAME, TTL: 60, Address: "target.not-served.example."},
+			{Domain: "dangling.", Type: dns.TypeCNAME, TTL: 60, Address: "missing.child.deleg.net."},
+			{Domain: "loop1.", Type: dns.TypeCNAME, TTL: 60, Address: "loop2.child.deleg.net."},
+			{Domain: "loop2.", Type: dns.TypeCNAME, TTL: 60, Address: "loop1.child.deleg.net."},
+		},
+	})
+}
+
+func writeRenderedZone(name string, cfg config.ConfigArr) {
+	zone, err := config.RenderZone(cfg)
+	if err != nil {
+		panic(err)
+	}
+	_ = os.WriteFile("testconfig/"+name+".toml", zone, 0o644)
 }
 
 func startTestServer() {
@@ -535,6 +569,72 @@ func TestSOARecord(t *testing.T) {
 	assert.Contains(t, soa.Mbox, "hostmaster.")
 	// Serial should be based on Modified timestamp (2022-05-27), not time.Now()
 	assert.Positive(t, soa.Serial)
+}
+
+// The child's apex NS answers alone, without the parent's delegation of the
+// same name merged into it.
+func TestNSAtDelegatedChildApexComesFromChildOnly(t *testing.T) {
+	r := queryTCP(t, "child.deleg.net", dns.TypeNS)
+	require.Len(t, r.Answer, 1)
+	assert.Equal(t, uint32(172800), r.Answer[0].Header().Ttl)
+	require.Len(t, r.Ns, 1)
+	assert.Len(t, r.Extra, 1, "glue for ns1.deleg.net once")
+}
+
+func TestSOAServesStoredRecord(t *testing.T) {
+	r := queryTCP(t, "child.deleg.net", dns.TypeSOA)
+	require.Len(t, r.Answer, 1)
+	soa, ok := r.Answer[0].(*dns.SOA)
+	require.True(t, ok)
+	assert.Equal(t, "child.deleg.net.", soa.Hdr.Name)
+	assert.Equal(t, uint32(900), soa.Hdr.Ttl)
+	assert.Equal(t, "hostmaster.deleg.net.", soa.Mbox)
+	assert.Equal(t, []uint32{1, 7200, 900, 1209600, 86400}, []uint32{soa.Serial, soa.Refresh, soa.Retry, soa.Expire, soa.Minttl})
+
+	r = queryTCP(t, "nope.child.deleg.net", dns.TypeA)
+	assert.Equal(t, dns.RcodeNameError, r.Rcode)
+	require.Len(t, r.Ns, 1)
+	assert.Equal(t, uint32(900), r.Ns[0].Header().Ttl)
+}
+
+func TestCNAMEAnsweredForOtherTypesAndFollowedInZone(t *testing.T) {
+	r := queryTCP(t, "hop.child.deleg.net", dns.TypeA)
+	assert.Equal(t, dns.RcodeSuccess, r.Rcode)
+	assert.True(t, r.Authoritative)
+	require.Len(t, r.Answer, 3)
+	assert.Equal(t, "alias.child.deleg.net.", r.Answer[0].(*dns.CNAME).Target)
+	assert.Equal(t, "www.child.deleg.net.", r.Answer[1].(*dns.CNAME).Target, "undotted target served fully qualified")
+	assert.Equal(t, "10.20.0.80", r.Answer[2].(*dns.A).A.String())
+}
+
+func TestCNAMEToUnservedTargetIsNotResolvedWithoutRecursion(t *testing.T) {
+	r := queryTCP(t, "away.child.deleg.net", dns.TypeA)
+	assert.Equal(t, dns.RcodeSuccess, r.Rcode)
+	require.Len(t, r.Answer, 1)
+	assert.Equal(t, "target.not-served.example.", r.Answer[0].(*dns.CNAME).Target)
+}
+
+func TestCNAMEToMissingNameInZoneIsNXDOMAIN(t *testing.T) {
+	r := queryTCP(t, "dangling.child.deleg.net", dns.TypeA)
+	assert.Equal(t, dns.RcodeNameError, r.Rcode)
+	require.Len(t, r.Answer, 1)
+	require.Len(t, r.Ns, 1)
+	assert.IsType(t, &dns.SOA{}, r.Ns[0])
+}
+
+func TestCNAMELoopStopsAtChainLimit(t *testing.T) {
+	r := queryTCP(t, "loop1.child.deleg.net", dns.TypeA)
+	assert.Len(t, r.Answer, 9)
+}
+
+func queryTCP(t *testing.T, name string, qtype uint16) *dns.Msg {
+	t.Helper()
+	c := dns.Client{Net: "tcp"}
+	m := dns.Msg{}
+	m.SetQuestion(dns.Fqdn(name), qtype)
+	r, _, err := c.Exchange(&m, testNS)
+	require.NoError(t, err)
+	return r
 }
 
 // --- SRV Record Tests ---

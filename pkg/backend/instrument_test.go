@@ -104,7 +104,7 @@ func newAuthoritativeTestConfig() *config.Config {
 	}
 	const fqdn = "example.test."
 	key := config.DomainLookup{Domain: fqdn, Type: dns.TypeA, Class: dns.ClassINET}
-	cfg.Records[key] = []config.Records{{Domain: fqdn, TTL: 60, Type: dns.TypeA, Class: dns.ClassINET, Address: "10.0.0.5"}}
+	cfg.Records[key] = []config.Records{{Domain: fqdn, TTL: 60, Type: dns.TypeA, Class: dns.ClassINET, Address: "10.0.0.5", Zone: "example.test"}}
 	cfg.Domain["example.test"] = config.Domain{Domain: "example.test", SOA: "ns.example.test.", Active: true}
 	return cfg
 }

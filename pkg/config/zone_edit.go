@@ -107,6 +107,10 @@ func RenderZone(cfg ConfigArr) ([]byte, error) {
 	if cfg.Domain.SOA != "" {
 		fmt.Fprintf(&b, "soa = %s\n", tomlString(cfg.Domain.SOA))
 	}
+	if cfg.Domain.SOARecord != "" {
+		fmt.Fprintf(&b, "soa_record = %s\n", tomlString(cfg.Domain.SOARecord))
+		fmt.Fprintf(&b, "soa_ttl = %d\n", cfg.Domain.SOATTL)
+	}
 	b.WriteString("[defaults]\n")
 	fmt.Fprintf(&b, "ttl = %d\n", ttl)
 	fmt.Fprintf(&b, "type = %d\n", rtype)

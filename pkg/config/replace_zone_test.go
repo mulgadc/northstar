@@ -78,3 +78,35 @@ func TestReplaceZoneRemovesStaleKeys(t *testing.T) {
 
 	assert.Empty(t, db.Records[stale], "stale RRset must be evicted on zone swap")
 }
+
+// A parent zone's delegation and the child zone's apex NS share a lookup key.
+// Each zone owns only its own records there, so reloading or deleting one
+// leaves the other's intact.
+func TestReplaceZoneKeepsAnotherZonesRecordsAtSharedName(t *testing.T) {
+	db := newConfigDB()
+	parent := NewZoneConfig(BaseZoneSeed{Domain: "spx3.net", Nameservers: []NameserverSeed{{Host: "ns1", IP: "10.0.0.1"}}})
+	parent.UpsertRecord("app.", TypeNS, ClassIN, "ns1.spx3.net.", 60)
+	ApplyDefaults(&parent, time.Now())
+	db.ReplaceZone(parent)
+	child := ConfigArr{Domain: Domain{Domain: "app.spx3.net"}, Records: []Records{{Type: TypeNS, Class: ClassIN, TTL: 172800, Address: "ns1.spx3.net."}}}
+	ApplyDefaults(&child, time.Now())
+	db.ReplaceZone(child)
+
+	key := DomainLookup{Domain: "app.spx3.net.", Type: TypeNS, Class: ClassIN}
+	ttls := func(zone string) []uint32 {
+		var out []uint32
+		for _, r := range db.ZoneRecords(zone, key) {
+			out = append(out, r.TTL)
+		}
+		return out
+	}
+	assert.Equal(t, []uint32{172800}, ttls("app.spx3.net"))
+	assert.Equal(t, []uint32{60}, ttls("spx3.net"))
+
+	db.ReplaceZone(parent)
+	assert.Equal(t, []uint32{172800}, ttls("app.spx3.net"), "reloading the parent removed the child's apex NS")
+
+	db.DeleteZone("app.spx3.net")
+	assert.Equal(t, []uint32{60}, ttls("spx3.net"), "deleting the child removed the parent's delegation")
+	assert.Empty(t, ttls("app.spx3.net"))
+}

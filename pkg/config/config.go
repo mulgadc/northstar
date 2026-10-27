@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -52,6 +53,11 @@ type Domain struct {
 	Active    bool
 	OwnerID   uint32
 	RecordRef []DomainLookup
+
+	// SOARecord, when set, is the SOA RDATA served for the zone in place of the
+	// synthesised one, with SOATTL as its TTL. Route 53 serves the stored SOA.
+	SOARecord string `toml:"soa_record,omitempty"`
+	SOATTL    uint32 `toml:"soa_ttl,omitempty"`
 }
 
 type Defaults struct {
@@ -79,6 +85,10 @@ type Records struct {
 	// (\" \\ \ddd escapes), each at most 255 bytes once decoded. Address is
 	// ignored when it is set.
 	Strings []string `toml:"strings,omitempty"`
+	// Zone is the canonical name of the zone that loaded the record. A parent's
+	// delegation and the child's apex NS share a lookup key, so each zone
+	// answers and replaces only its own records there.
+	Zone string `toml:"-"`
 }
 
 type DomainLookup struct {
@@ -230,12 +240,12 @@ func GenerateTestDomains(num int) *Config {
 		for i2 := 1; i2 < 5; i2++ {
 			ip := fmt.Sprintf("213.189.1.%d", i2)
 			record := DomainLookup{Domain: domain, Type: 1, Class: 1}
-			t.Records[record] = append(t.Records[record], Records{Domain: domain, Address: ip})
+			t.Records[record] = append(t.Records[record], Records{Domain: domain, Address: ip, Zone: domain})
 			refs = append(refs, record)
 		}
 
 		record := DomainLookup{Domain: domain, Type: 16, Class: 1}
-		t.Records[record] = append(t.Records[record], Records{Domain: domain, Address: "TESTRECORD"})
+		t.Records[record] = append(t.Records[record], Records{Domain: domain, Address: "TESTRECORD", Zone: domain})
 		refs = append(refs, record)
 
 		t.Domain[domain] = Domain{Domain: domain, SOA: fmt.Sprintf("ns.%s", domain), RecordRef: refs}
@@ -563,13 +573,9 @@ func (t *Config) AddZone(myconfig ConfigArr) {
 	t.Mu.Lock()
 	defer t.Mu.Unlock()
 
-	for _, item := range myconfig.Records {
-		record := DomainLookup{Domain: CanonicalFQDN(item.Domain), Type: item.Type, Class: item.Class}
-		t.Records[record] = append(t.Records[record], item)
-		myconfig.Domain.RecordRef = append(myconfig.Domain.RecordRef, record)
-	}
-
-	t.Domain[CanonicalZone(myconfig.Domain.Domain)] = myconfig.Domain
+	zoneKey := CanonicalZone(myconfig.Domain.Domain)
+	t.insertZoneRecords(zoneKey, &myconfig)
+	t.Domain[zoneKey] = myconfig.Domain
 
 	slog.Info("added zone to local DNS DB", "domain", myconfig.Domain.Domain)
 }
@@ -586,17 +592,11 @@ func (t *Config) ReplaceZone(myconfig ConfigArr) {
 
 	// Drop the previous incarnation of this zone, if present.
 	if old, ok := t.Domain[zoneKey]; ok {
-		for _, ref := range old.RecordRef {
-			delete(t.Records, ref)
-		}
+		t.dropZoneRecords(zoneKey, old.RecordRef)
 	}
 
 	myconfig.Domain.RecordRef = nil
-	for _, item := range myconfig.Records {
-		record := DomainLookup{Domain: CanonicalFQDN(item.Domain), Type: item.Type, Class: item.Class}
-		t.Records[record] = append(t.Records[record], item)
-		myconfig.Domain.RecordRef = append(myconfig.Domain.RecordRef, record)
-	}
+	t.insertZoneRecords(zoneKey, &myconfig)
 	t.Domain[zoneKey] = myconfig.Domain
 
 	slog.Info("replaced zone in local DNS DB", "domain", myconfig.Domain.Domain, "records", len(myconfig.Records))
@@ -613,13 +613,48 @@ func (t *Config) DeleteZone(domain string) {
 		return
 	}
 
-	for _, v := range record.RecordRef {
-		delete(t.Records, v)
-	}
-
+	t.dropZoneRecords(zoneKey, record.RecordRef)
 	delete(t.Domain, zoneKey)
 
 	slog.Info("DeleteZone: removed zone from local DNS DB", "domain", domain)
+}
+
+// insertZoneRecords indexes a zone's records, tagged as the zone's own. The
+// caller holds the write lock.
+func (t *Config) insertZoneRecords(zoneKey string, myconfig *ConfigArr) {
+	for _, item := range myconfig.Records {
+		item.Zone = zoneKey
+		record := DomainLookup{Domain: CanonicalFQDN(item.Domain), Type: item.Type, Class: item.Class}
+		t.Records[record] = append(t.Records[record], item)
+		myconfig.Domain.RecordRef = append(myconfig.Domain.RecordRef, record)
+	}
+}
+
+// dropZoneRecords removes a zone's own records from its keys, leaving any
+// other zone's records at the same key. The caller holds the write lock.
+func (t *Config) dropZoneRecords(zoneKey string, refs []DomainLookup) {
+	for _, ref := range refs {
+		kept := slices.DeleteFunc(t.Records[ref], func(r Records) bool { return r.Zone == zoneKey })
+		if len(kept) == 0 {
+			delete(t.Records, ref)
+		} else {
+			t.Records[ref] = kept
+		}
+	}
+}
+
+// ZoneRecords returns a copy of zone's own records under key.
+func (c *Config) ZoneRecords(zone string, key DomainLookup) []Records {
+	zoneKey := CanonicalZone(zone)
+	c.Mu.RLock()
+	defer c.Mu.RUnlock()
+	var out []Records
+	for _, r := range c.Records[key] {
+		if r.Zone == zoneKey {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // ReadZone parses a single zone file from the filesystem or S3. For an s3://

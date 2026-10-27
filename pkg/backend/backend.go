@@ -134,23 +134,10 @@ func (h *Handler) serve(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) *
 	// Check if we are authoritative for this domain
 	zone, isAuth := h.Conf.FindZone(lookupName)
 
-	// Lookup records
-	qq := config.DomainLookup{Domain: lookupName, Type: qtype, Class: qclass}
-	h.Conf.Mu.RLock()
-	records := make([]config.Records, len(h.Conf.Records[qq]))
-	copy(records, h.Conf.Records[qq])
-	h.Conf.Mu.RUnlock()
-
-	// If no exact match, try wildcard
-	if len(records) == 0 && isAuth {
-		wildcardName := wildcardFor(lookupName, zone)
-		if wildcardName != "" {
-			wq := config.DomainLookup{Domain: wildcardName, Type: qtype, Class: qclass}
-			h.Conf.Mu.RLock()
-			records = make([]config.Records, len(h.Conf.Records[wq]))
-			copy(records, h.Conf.Records[wq])
-			h.Conf.Mu.RUnlock()
-		}
+	records, cname := h.find(zone, isAuth, lookupName, qtype, qclass)
+	if cname != nil {
+		h.answerCNAME(ctx, w, r, &msg, domain, cname)
+		return fitUDP(w, &msg, clientBufSize)
 	}
 
 	if len(records) == 0 {
@@ -207,7 +194,7 @@ func (h *Handler) serve(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) *
 	// We have records — build response
 	msg.Authoritative = true
 
-	for i := 0; i < len(records); i++ {
+	for i := range records {
 		record := &records[i]
 
 		switch qtype {
@@ -225,26 +212,6 @@ func (h *Handler) serve(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) *
 					Hdr: dns.RR_Header{Name: domain, Rrtype: dns.TypeA, Class: record.Class, Ttl: record.TTL},
 					A:   net.ParseIP(record.Address),
 				})
-			}
-
-			// CNAME chasing: if an A query finds a CNAME, resolve it
-			if record.Type == dns.TypeCNAME {
-				msg.Answer = append(msg.Answer, &dns.CNAME{
-					Hdr:    dns.RR_Header{Name: domain, Rrtype: dns.TypeCNAME, Class: record.Class, Ttl: record.TTL},
-					Target: record.Address,
-				})
-
-				lookupRecords, err := h.Upstream.Resolve(ctx, record.Address, dns.TypeA)
-				if err == nil {
-					for _, rr := range lookupRecords {
-						if t, ok := rr.(*dns.A); ok {
-							msg.Answer = append(msg.Answer, &dns.A{
-								Hdr: dns.RR_Header{Name: t.Hdr.Name, Rrtype: dns.TypeA, Class: t.Hdr.Class, Ttl: t.Hdr.Ttl},
-								A:   t.A,
-							})
-						}
-					}
-				}
 			}
 
 		case dns.TypeCNAME:
@@ -337,19 +304,80 @@ func (h *Handler) serve(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) *
 		msg.Ns = []dns.RR{h.SOA(domain, zone)}
 	}
 
-	// Check response size for UDP
-	if isUDP(w) {
-		maxSize := int(clientBufSize)
-		if msg.Len() > maxSize {
-			// Set TC bit so client retries over TCP
-			msg.Truncated = true
-			msg.Answer = nil
-			msg.Ns = nil
-			// Keep Extra (EDNS0 OPT)
+	return fitUDP(w, &msg, clientBufSize)
+}
+
+// fitUDP sets TC and drops the answer when a UDP reply would exceed the
+// client's buffer, so the client retries over TCP.
+func fitUDP(w dns.ResponseWriter, msg *dns.Msg, clientBufSize uint16) *dns.Msg {
+	if isUDP(w) && msg.Len() > int(clientBufSize) {
+		msg.Truncated = true
+		msg.Answer = nil
+		msg.Ns = nil
+		// Keep Extra (EDNS0 OPT)
+	}
+	return msg
+}
+
+// find returns zone's records of qtype at name, else at its wildcard. Where it
+// finds a CNAME instead it returns that, since a name holding a CNAME holds no
+// other data (RFC 1034 §3.6.2).
+func (h *Handler) find(zone string, isAuth bool, name string, qtype, qclass uint16) ([]config.Records, *config.Records) {
+	if !isAuth {
+		return nil, nil
+	}
+	names := []string{name}
+	if w := wildcardFor(name, zone); w != "" && w != name {
+		names = append(names, w)
+	}
+	for _, n := range names {
+		if rs := h.Conf.ZoneRecords(zone, config.DomainLookup{Domain: n, Type: qtype, Class: qclass}); len(rs) > 0 {
+			return rs, nil
+		}
+		if qtype == dns.TypeCNAME {
+			continue
+		}
+		if rs := h.Conf.ZoneRecords(zone, config.DomainLookup{Domain: n, Type: dns.TypeCNAME, Class: qclass}); len(rs) > 0 {
+			return nil, &rs[0]
 		}
 	}
+	return nil, nil
+}
 
-	return &msg
+// cnameDepthKey carries how many CNAMEs answerCNAME has followed.
+type cnameDepthKey struct{}
+
+const maxCNAMEChain = 8
+
+// answerCNAME answers with the CNAME, then with the target's answer as this
+// server would give it. A stub resolver gets the whole chain, and the recursion
+// policy still decides whether an out-of-zone target is resolved.
+func (h *Handler) answerCNAME(ctx context.Context, w dns.ResponseWriter, r *dns.Msg, msg *dns.Msg, domain string, cname *config.Records) {
+	target := dns.Fqdn(cname.Address)
+	msg.Authoritative = true
+	msg.Answer = append(msg.Answer, &dns.CNAME{
+		Hdr:    dns.RR_Header{Name: domain, Rrtype: dns.TypeCNAME, Class: cname.Class, Ttl: cname.TTL},
+		Target: target,
+	})
+
+	depth, _ := ctx.Value(cnameDepthKey{}).(int)
+	if depth >= maxCNAMEChain {
+		return
+	}
+	sub := new(dns.Msg)
+	sub.SetQuestion(target, r.Question[0].Qtype)
+	sub.Question[0].Qclass = r.Question[0].Qclass
+	sub.RecursionDesired = r.RecursionDesired
+	sub.SetEdns0(dns.MaxMsgSize, false)
+	resp := h.serve(context.WithValue(ctx, cnameDepthKey{}, depth+1), w, sub)
+	if resp.Rcode != dns.RcodeSuccess && resp.Rcode != dns.RcodeNameError {
+		return
+	}
+	msg.Rcode = resp.Rcode
+	msg.Answer = append(msg.Answer, resp.Answer...)
+	if len(resp.Answer) == 0 {
+		msg.Ns = resp.Ns
+	}
 }
 
 func (h *Handler) lookupExtra(address string, qtype uint16, qclass uint16) []dns.RR {
@@ -388,11 +416,7 @@ func (h *Handler) addNSAuthority(msg *dns.Msg, zone string, qclass uint16) {
 	zoneFQDN := config.CanonicalFQDN(zone)
 	nsLookup := config.DomainLookup{Domain: zoneFQDN, Type: dns.TypeNS, Class: qclass}
 
-	h.Conf.Mu.RLock()
-	nsRecords := h.Conf.Records[nsLookup]
-	h.Conf.Mu.RUnlock()
-
-	for _, ns := range nsRecords {
+	for _, ns := range h.Conf.ZoneRecords(zone, nsLookup) {
 		if ns.Type == dns.TypeNS {
 			msg.Ns = append(msg.Ns, &dns.NS{
 				Hdr: dns.RR_Header{Name: zoneFQDN, Rrtype: dns.TypeNS, Class: ns.Class, Ttl: ns.TTL},
@@ -424,10 +448,18 @@ func (h *Handler) SOA(domain string, zone string) dns.RR {
 	// Use zone Modified timestamp for serial (monotonically increases on changes)
 	var serial uint32
 	h.Conf.Mu.RLock()
-	if d, ok := h.Conf.Domain[config.CanonicalZone(zone)]; ok && !d.Modified.IsZero() {
+	d, ok := h.Conf.Domain[config.CanonicalZone(zone)]
+	h.Conf.Mu.RUnlock()
+	if ok && d.SOARecord != "" {
+		rr, err := dns.NewRR(fmt.Sprintf("%s %d IN SOA %s", soaName, d.SOATTL, d.SOARecord))
+		if err == nil && rr != nil {
+			return rr
+		}
+		slog.Warn("zone SOA record is invalid, serving a synthesised SOA", "zone", zone, "err", err)
+	}
+	if ok && !d.Modified.IsZero() {
 		serial = uint32(d.Modified.Unix()) //nolint:gosec // G115: SOA serial is uint32 per RFC 1035; second-resolution wrap is acceptable
 	}
-	h.Conf.Mu.RUnlock()
 
 	return &dns.SOA{
 		Hdr:     dns.RR_Header{Name: soaName, Rrtype: dns.TypeSOA, Class: dns.ClassINET, Ttl: 60},
