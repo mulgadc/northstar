@@ -1,6 +1,6 @@
 # Base images are pinned by digest so a rebuild of the same commit gets the
 # same bytes; Dependabot bumps the tag and digest together.
-FROM golang:1.27.3-alpine3.24@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb AS build-env
+FROM golang:1.27.4-alpine3.24@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf AS build-env
 
 # Build phase
 RUN apk add bash build-base git
