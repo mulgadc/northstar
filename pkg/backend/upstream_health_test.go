@@ -325,3 +325,65 @@ func TestExchange_OnlyFirstThreeForwardersAreUsed(t *testing.T) {
 	require.Error(t, err)
 	assert.EqualValues(t, 0, fourth.queries.Load())
 }
+
+// Two forwarders leave cooldown together and the first is still dead: while
+// one query waits on it, others still get the recovered second one.
+func TestExchange_TrialIsClaimedOnlyWhenContacted(t *testing.T) {
+	release := make(chan struct{})
+	first := startFake(t, hold(release))
+	second := startFake(t, answerA)
+	third := startFake(t, answerA)
+	u, clk := newUpstream(t, first, second, third)
+	now := clk.now()
+	backend.SetHealth(u, first.addr, 1, now.Add(-time.Second))
+	backend.SetHealth(u, second.addr, 1, now.Add(-time.Second))
+	backend.SetHealth(u, third.addr, 1, now.Add(10*time.Second))
+
+	trial := make(chan error, 1)
+	go func() {
+		_, err := ask(t, u, "trial.example.")
+		trial <- err
+	}()
+	<-first.received
+
+	for range 3 {
+		requireAnswer(t, u, "other.example.")
+	}
+	assert.EqualValues(t, 1, first.queries.Load(), "a second query reached the forwarder under trial")
+	assert.EqualValues(t, 0, third.queries.Load(), "the recovered second forwarder was held by the other query's trial")
+	close(release)
+	require.NoError(t, <-trial)
+}
+
+// startTruncating answers over UDP with TC set and no answer; nothing listens
+// on TCP at that port, so the retry over TCP fails.
+func startTruncating(t *testing.T) *fake {
+	t.Helper()
+	return startFake(t, func(w dns.ResponseWriter, r *dns.Msg) {
+		m := new(dns.Msg)
+		m.SetReply(r)
+		m.RecursionAvailable = true
+		m.Truncated = true
+		_ = w.WriteMsg(m)
+	})
+}
+
+func TestExchange_FailedTCPRetryFailsOver(t *testing.T) {
+	trunc := startTruncating(t)
+	ok := startFake(t, answerA)
+	u, _ := newUpstream(t, trunc, ok)
+
+	requireAnswer(t, u, "big.example.")
+	assert.EqualValues(t, 1, ok.queries.Load())
+	assert.Equal(t, 1, backend.Fails(u, trunc.addr))
+}
+
+func TestNewUpstream_InvalidAddressIsDroppedAndNotLogged(t *testing.T) {
+	logs := captureLogs(t)
+	ok := startFake(t, answerA)
+	u := backend.NewUpstream(backend.ParseUpstreamServers([]string{"user:s3cret@192.0.2.1:53", "192.0.2.1", ok.addr}))
+
+	assert.Equal(t, []string{ok.addr}, u.Addresses())
+	assert.Equal(t, 2, logs.count("upstream nameserver is not host:port, ignored"))
+	assert.Zero(t, logs.count("s3cret"))
+}

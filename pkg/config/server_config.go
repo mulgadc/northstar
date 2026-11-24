@@ -50,6 +50,9 @@ type Quotas struct {
 // AllowRecursionFrom gate the recursion path by client address. Authoritative
 // answers are never gated — a public authoritative server must answer anyone.
 type UpstreamConfig struct {
+	// Nameservers, at most 3, must be interchangeable recursive resolvers: a
+	// REFUSED from one is asked of the next. A filtering or split-horizon
+	// resolver whose REFUSED is policy must be the only entry.
 	Nameservers []string `toml:"nameservers"`
 	// AllowRecursion opens recursion to every client, including the public
 	// internet. Defaults to false, which is the only safe value on a node whose

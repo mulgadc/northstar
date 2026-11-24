@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -60,13 +62,15 @@ const (
 	attemptBudget  = 1500 * time.Millisecond
 	cooldown       = 10 * time.Second
 	maxForwarders  = 3
-	upstreamUDPBuf = 1232 // DNS flag-day 2020 EDNS0 payload, as unbound/dnsmasq use
+	resolveAttempt = 5 * time.Second // Resolve keeps its per-server reply wait
+	upstreamUDPBuf = 1232            // DNS flag-day 2020 EDNS0 payload, as unbound/dnsmasq use
 )
 
 // NewUpstream creates an upstream resolver from an explicit server list. An
 // empty list means no forwarding (non-authoritative queries are refused).
 // Only the first maxForwarders servers are used.
 func NewUpstream(servers []UpstreamServer) *Upstream {
+	servers = validServers(servers)
 	if len(servers) > maxForwarders {
 		slog.Warn("upstream nameservers beyond the first 3 are ignored",
 			"ignored", addresses(servers[maxForwarders:]))
@@ -77,6 +81,33 @@ func NewUpstream(servers []UpstreamServer) *Upstream {
 		u.servers = append(u.servers, &upstreamHealth{UpstreamServer: s})
 	}
 	return u
+}
+
+// validServers drops entries that are not host:port, naming them only by
+// position so a mistyped credential never reaches the log.
+func validServers(servers []UpstreamServer) []UpstreamServer {
+	valid := make([]UpstreamServer, 0, len(servers))
+	for i, s := range servers {
+		host, port, err := net.SplitHostPort(s.Address)
+		if err != nil || host == "" || strings.ContainsFunc(host, invalidHostRune) {
+			slog.Warn("upstream nameserver is not host:port, ignored", "index", i)
+			continue
+		}
+		if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+			slog.Warn("upstream nameserver is not host:port, ignored", "index", i)
+			continue
+		}
+		valid = append(valid, s)
+	}
+	return valid
+}
+
+func invalidHostRune(r rune) bool {
+	switch {
+	case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '-', r == ':':
+		return false
+	}
+	return true
 }
 
 func addresses(servers []UpstreamServer) []string {
@@ -153,9 +184,7 @@ func exchangeServer(ctx context.Context, server UpstreamServer, m *dns.Msg) (*dn
 		return nil, err
 	}
 	if in.Truncated {
-		if tin, terr := exchangeConn(ctx, tcpClient(), server.Address, m); terr == nil {
-			return tin, nil
-		}
+		return exchangeConn(ctx, tcpClient(), server.Address, m)
 	}
 	return in, nil
 }
@@ -238,77 +267,88 @@ func failureReason(in *dns.Msg, err error) string {
 }
 
 // order returns the forwarders to try for one query: those not in cooldown in
-// config order, then those in cooldown, lowest score first. One query at a
-// time retries a forwarder whose cooldown has ended; it is returned in claimed.
-func (u *Upstream) order() (order, claimed []*upstreamHealth) {
+// config order, then those in cooldown, lowest score first. A forwarder that
+// another query is retrying after its cooldown is left out.
+func (u *Upstream) order() []*upstreamHealth {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	now := u.now()
-	shared := len(u.servers) > 1
-	var cooling []*upstreamHealth
+	var order, cooling []*upstreamHealth
 	for _, s := range u.servers {
 		switch {
-		case s.trial && shared:
+		case s.trial:
 		case now.Before(s.downUntil):
 			cooling = append(cooling, s)
 		default:
-			if s.fails > 0 && shared {
-				s.trial = true
-				claimed = append(claimed, s)
-			}
 			order = append(order, s)
 		}
 	}
 	slices.SortStableFunc(cooling, func(a, b *upstreamHealth) int { return cmp.Compare(a.fails, b.fails) })
-	order = append(order, cooling...)
-	if len(order) == 0 {
-		// Every forwarder is in another query's trial: ask them anyway.
-		order = slices.Clone(u.servers)
-	}
-	return order, claimed
+	return append(order, cooling...)
 }
 
-func (u *Upstream) releaseTrials(claimed []*upstreamHealth) {
+// claim is called just before contacting s. It reports false if another query
+// is retrying s, and claims the retry of a failed forwarder whose cooldown has
+// ended, so only one query at a time pays for one that is still dead. last is
+// true when none of the rest can be contacted, so s gets the whole budget.
+func (u *Upstream) claim(s *upstreamHealth, rest []*upstreamHealth) (ok, trial, last bool) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	for _, s := range claimed {
+	if s.trial {
+		return false, false, false
+	}
+	if s.fails > 0 && !u.now().Before(s.downUntil) && len(u.servers) > 1 {
+		s.trial = true
+		trial = true
+	}
+	last = !slices.ContainsFunc(rest, func(r *upstreamHealth) bool { return !r.trial })
+	return true, trial, last
+}
+
+// record applies one attempt's outcome to s and ends its trial. The log line
+// is returned, not written, so a slow log sink never holds the mutex.
+func (u *Upstream) record(s *upstreamHealth, trial bool, reason string) func() {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if trial {
 		s.trial = false
 	}
-}
-
-func (u *Upstream) markFailed(s *upstreamHealth, reason string) {
-	u.mu.Lock()
-	defer u.mu.Unlock()
 	now := u.now()
+	if reason == "" {
+		if s.fails == 0 {
+			return func() {}
+		}
+		failedFor := now.Sub(s.failingSince).Round(time.Millisecond).String()
+		s.fails, s.downUntil = 0, time.Time{}
+		return func() { slog.Info("upstream DNS server recovered", "server", s.Address, "failed_for", failedFor) }
+	}
 	s.fails++
 	s.downUntil = now.Add(cooldown)
-	if s.fails == 1 {
-		s.failingSince = now
-		slog.Info("upstream DNS server failing", "server", s.Address, "reason", reason, "consecutive_failures", s.fails)
+	if s.fails > 1 {
+		return func() {}
+	}
+	s.failingSince = now
+	return func() {
+		slog.Info("upstream DNS server failing", "server", s.Address, "reason", reason, "consecutive_failures", 1)
 	}
 }
 
-func (u *Upstream) markOK(s *upstreamHealth) {
+func (u *Upstream) release(s *upstreamHealth) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	if s.fails == 0 {
-		return
-	}
-	slog.Info("upstream DNS server recovered", "server", s.Address,
-		"failed_for", u.now().Sub(s.failingSince).Round(time.Millisecond).String())
-	s.fails = 0
-	s.downUntil = time.Time{}
+	s.trial = false
 }
 
-func (u *Upstream) warnAllFailed(reasons []string) {
+// allFailedWarnDue reports whether the all-failed Warn is due (once per cooldown).
+func (u *Upstream) allFailedWarnDue() bool {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	now := u.now()
 	if !u.lastAllFailed.IsZero() && now.Sub(u.lastAllFailed) < cooldown {
-		return
+		return false
 	}
 	u.lastAllFailed = now
-	slog.Warn("all upstream DNS servers failed", "reasons", reasons)
+	return true
 }
 
 // Exchange forwards a complete query to the forwarders, healthiest first, and
@@ -326,16 +366,19 @@ func (u *Upstream) Exchange(ctx context.Context, r *dns.Msg) (*dns.Msg, error) {
 
 	qctx, cancel := context.WithTimeout(ctx, queryBudget)
 	defer cancel()
-	order, claimed := u.order()
-	defer u.releaseTrials(claimed)
+	order := u.order()
 
 	var refused *dns.Msg
-	allRefused := len(order) == len(u.servers)
 	var reasons []string
+	refusals := 0
 	for i, s := range order {
+		ok, trial, last := u.claim(s, order[i+1:])
+		if !ok {
+			continue
+		}
 		// The last forwarder gets all that is left of the query budget.
 		actx, acancel := qctx, context.CancelFunc(func() {})
-		if i < len(order)-1 {
+		if !last {
 			actx, acancel = context.WithTimeout(qctx, attemptBudget)
 		}
 		start := time.Now()
@@ -343,31 +386,34 @@ func (u *Upstream) Exchange(ctx context.Context, r *dns.Msg) (*dns.Msg, error) {
 		timedOut := err != nil && actx.Err() != nil
 		acancel()
 		if ctx.Err() != nil {
+			if trial {
+				u.release(s)
+			}
 			return nil, ctx.Err()
 		}
 
 		reason := failureReason(in, err)
-		if reason == "" {
-			u.markOK(s)
-			return in, nil
-		}
 		if timedOut {
 			reason = fmt.Sprintf("no reply within %s", time.Since(start).Round(100*time.Millisecond))
 		}
-		u.markFailed(s, reason)
+		u.record(s, trial, reason)()
+		if reason == "" {
+			return in, nil
+		}
 		reasons = append(reasons, s.Address+": "+reason)
 		if in != nil && in.Rcode == dns.RcodeRefused {
 			refused = in
-		} else {
-			allRefused = false
+			refusals++
 		}
 		if qctx.Err() != nil {
 			break
 		}
 	}
 
-	u.warnAllFailed(reasons)
-	if allRefused && len(reasons) == len(u.servers) {
+	if u.allFailedWarnDue() {
+		slog.Warn("all upstream DNS servers failed", "reasons", reasons)
+	}
+	if refusals == len(u.servers) {
 		return refused, nil
 	}
 	return nil, errors.New("all upstream servers failed")
@@ -384,7 +430,7 @@ func (u *Upstream) Resolve(ctx context.Context, name string, qtype uint16) ([]dn
 	var lastErr error
 
 	for _, server := range u.servers {
-		actx, cancel := context.WithTimeout(ctx, queryBudget)
+		actx, cancel := context.WithTimeout(ctx, resolveAttempt)
 		in, err := u.exchangeAndRecord(actx, "dns.upstream.resolve", server.UpstreamServer, m)
 		cancel()
 		if err != nil {
