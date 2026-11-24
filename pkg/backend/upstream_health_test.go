@@ -59,11 +59,13 @@ func answerA(w dns.ResponseWriter, r *dns.Msg) {
 	_ = w.WriteMsg(m)
 }
 
+// answerRcode replies with code; a REFUSED clears RA, as a server that will
+// not recurse for us answers.
 func answerRcode(code int) func(w dns.ResponseWriter, r *dns.Msg) {
 	return func(w dns.ResponseWriter, r *dns.Msg) {
 		m := new(dns.Msg)
 		m.SetRcode(r, code)
-		m.RecursionAvailable = true
+		m.RecursionAvailable = code != dns.RcodeRefused
 		_ = w.WriteMsg(m)
 	}
 }
@@ -426,4 +428,22 @@ func TestExchange_OneForwarderStaysOpenDuringTrials(t *testing.T) {
 func TestNewUpstream_ScopedIPv6AndNamesAreKept(t *testing.T) {
 	u := backend.NewUpstream(backend.ParseUpstreamServers([]string{"[fe80::1%eth0]:53", "tls://dns.example.net:853", "[2001:db8::1]:53"}))
 	assert.Equal(t, []string{"[fe80::1%eth0]:53", "tls://dns.example.net:853", "[2001:db8::1]:53"}, u.Addresses())
+}
+
+func TestExchange_RefusedWithRecursionIsRelayed(t *testing.T) {
+	filter := startFake(t, func(w dns.ResponseWriter, r *dns.Msg) {
+		m := new(dns.Msg)
+		m.SetRcode(r, dns.RcodeRefused)
+		m.RecursionAvailable = true
+		_ = w.WriteMsg(m)
+	})
+	backup := startFake(t, answerA)
+	u, clk := newUpstream(t, filter, backup)
+	backend.SetHealth(u, filter.addr, 1, clk.now().Add(-time.Second))
+
+	resp, err := ask(t, u, "blocked.example.")
+	require.NoError(t, err)
+	assert.Equal(t, dns.RcodeRefused, resp.Rcode)
+	assert.EqualValues(t, 0, backup.queries.Load(), "the backup was asked to override a policy refusal")
+	assert.Equal(t, 0, backend.Fails(u, filter.addr))
 }

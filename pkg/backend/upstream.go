@@ -63,7 +63,7 @@ const (
 	attemptBudget  = 1500 * time.Millisecond
 	cooldown       = 10 * time.Second
 	maxForwarders  = 3
-	upstreamUDPBuf = 1232            // DNS flag-day 2020 EDNS0 payload, as unbound/dnsmasq use
+	upstreamUDPBuf = 1232 // DNS flag-day 2020 EDNS0 payload, as unbound/dnsmasq use
 )
 
 // NewUpstream creates an upstream resolver from an explicit server list. An
@@ -277,16 +277,20 @@ func (u *Upstream) exchangeAndRecord(ctx context.Context, spanName string, excha
 	return in, err
 }
 
-// failureReason says why a reply is not an answer, or "" if it is. NOERROR
-// and NXDOMAIN are answers; a referral without recursion available comes from
-// a server that will not recurse for us.
+// failureReason says why a reply is not an answer, or "" if it is. A REFUSED
+// or referral with recursion unavailable comes from a server that will not
+// recurse for us; a recursive resolver's REFUSED is its policy answer.
 func failureReason(in *dns.Msg, err error) string {
 	if err != nil {
 		return err.Error()
 	}
 	switch in.Rcode {
-	case dns.RcodeServerFailure, dns.RcodeRefused, dns.RcodeNotImplemented, dns.RcodeFormatError:
+	case dns.RcodeServerFailure, dns.RcodeNotImplemented, dns.RcodeFormatError:
 		return dns.RcodeToString[in.Rcode]
+	case dns.RcodeRefused:
+		if !in.RecursionAvailable {
+			return "REFUSED without recursion"
+		}
 	case dns.RcodeSuccess:
 		if !in.RecursionAvailable && len(in.Answer) == 0 && slices.ContainsFunc(in.Ns, func(rr dns.RR) bool {
 			return rr.Header().Rrtype == dns.TypeNS
