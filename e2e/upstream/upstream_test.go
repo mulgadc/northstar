@@ -272,6 +272,28 @@ func TestUpstream_BadAnswerFromFirstUpstreamFailsOver(t *testing.T) {
 	}
 }
 
+// policyRefused is a recursive resolver refusing a name by policy: REFUSED
+// with recursion available.
+func policyRefused(w dns.ResponseWriter, r *dns.Msg) {
+	m := new(dns.Msg)
+	m.SetRcode(r, dns.RcodeRefused)
+	m.RecursionAvailable = true
+	_ = w.WriteMsg(m)
+}
+
+// A recursive resolver's policy REFUSED reaches the guest; the next upstream
+// is not asked to override it.
+func TestUpstream_PolicyRefusedFromRecursiveResolverIsRelayed(t *testing.T) {
+	filter := startUpstream(t, "filter", policyRefused)
+	ok := startUpstream(t, "ok", answers)
+	n := startNorthstar(t, filter.addr, ok.addr)
+
+	r, took, err := query(n.addr, "blocked.example.", guestTimeout)
+	require.NoErrorf(t, err, "no answer after %s", took.Round(time.Millisecond))
+	require.Equal(t, dns.RcodeRefused, r.Rcode, "the policy refusal was not relayed")
+	require.EqualValues(t, 0, ok.queries.Load(), "the next upstream was asked to override a policy refusal")
+}
+
 // With every upstream dead the guest gets SERVFAIL before its own timeout,
 // not a timeout.
 func TestUpstream_AllUpstreamsDead_ServfailBeforeGuestTimeout(t *testing.T) {
