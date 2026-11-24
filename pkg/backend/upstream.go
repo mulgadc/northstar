@@ -31,6 +31,7 @@ type Upstream struct {
 	mu            sync.Mutex
 	lastAllFailed time.Time
 	now           func() time.Time
+	afterOrder    func()
 
 	// inst is wired in by backend.NewHandler so upstream spans/metrics share
 	// the Handler's tracer/meter. A nil inst (Upstream built via NewUpstream
@@ -306,7 +307,16 @@ func failureReason(in *dns.Msg, err error) string {
 // another query is retrying after its cooldown is left out.
 func (u *Upstream) order() []*upstreamHealth {
 	u.mu.Lock()
-	defer u.mu.Unlock()
+	hook := u.afterOrder
+	order := u.orderLocked()
+	u.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	return order
+}
+
+func (u *Upstream) orderLocked() []*upstreamHealth {
 	now := u.now()
 	var order, cooling []*upstreamHealth
 	for _, s := range u.servers {

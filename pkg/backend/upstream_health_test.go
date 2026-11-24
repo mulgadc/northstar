@@ -447,3 +447,41 @@ func TestExchange_RefusedWithRecursionIsRelayed(t *testing.T) {
 	assert.EqualValues(t, 0, backup.queries.Load(), "the backup was asked to override a policy refusal")
 	assert.Equal(t, 0, backend.Fails(u, filter.addr))
 }
+
+func TestExchange_LookupRetakesOrderWhenEveryCandidateWasClaimed(t *testing.T) {
+	releaseA, releaseB := make(chan struct{}), make(chan struct{})
+	a := startFake(t, func(w dns.ResponseWriter, r *dns.Msg) {
+		<-releaseA
+		answerRcode(dns.RcodeServerFailure)(w, r)
+	})
+	b := startFake(t, hold(releaseB))
+	u, clk := newUpstream(t, a, b)
+	now := clk.now()
+	backend.SetHealth(u, a.addr, 1, now.Add(-time.Second))
+	backend.SetHealth(u, b.addr, 1, now.Add(-time.Second))
+
+	// The first lookup takes the trial of a and is held there.
+	first := make(chan error, 1)
+	go func() {
+		_, err := ask(t, u, "first.example.")
+		first <- err
+	}()
+	<-a.received
+
+	// The second lookup's order omits a. Before it contacts b, a fails and
+	// the first lookup moves on to claim the trial of b.
+	var once sync.Once
+	backend.SetAfterOrder(u, func() {
+		once.Do(func() {
+			close(releaseA)
+			<-b.received
+			a.set(answerA)
+		})
+	})
+	resp, err := ask(t, u, "second.example.")
+	close(releaseB)
+	require.NoError(t, err, "the lookup ended without contacting a forwarder")
+	require.NotEmpty(t, resp.Answer)
+	assert.EqualValues(t, 2, a.queries.Load())
+	require.NoError(t, <-first)
+}

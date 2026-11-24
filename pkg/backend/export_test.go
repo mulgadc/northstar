@@ -31,3 +31,10 @@ func SetHealth(u *Upstream, addr string, fails int, downUntil time.Time) {
 		}
 	}
 }
+
+// SetAfterOrder runs f each time a lookup has taken its forwarder order.
+func SetAfterOrder(u *Upstream, f func()) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.afterOrder = f
+}
