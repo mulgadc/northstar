@@ -330,6 +330,7 @@ func TestUpstream_Live_DeadAndLameFirst(t *testing.T) {
 		lameNS = "216.239.32.10:53" // ns1.google.com: REFUSED for names outside google.com
 	}
 	n := startNorthstar(t, "192.0.2.1:53", lameNS, "1.1.1.1:53")
-	guestLookup(t, n, "example.org.", 2*time.Second)
+	// 4 s: a silent server such as a broken router costs a full attempt.
+	guestLookup(t, n, "example.org.", 4*time.Second)
 	guestLookup(t, n, "example.com.", 500*time.Millisecond)
 }
