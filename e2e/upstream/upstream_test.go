@@ -1,10 +1,6 @@
-// Package upstream runs the real northstar binary against upstream resolvers
-// the test controls, and queries it the way a guest resolver does: one UDP
-// attempt with a 5 s timeout. It needs no docker and no network.
-//
-//	NORTHSTAR_E2E_UPSTREAM=1 go test -count=1 -v ./upstream/
-//
-// NORTHSTAR_E2E_LIVE=1 adds one test against real public resolvers.
+// Package upstream runs the real northstar binary against fake upstreams and
+// queries it as a guest does: one UDP attempt, 5 s. `make e2e-upstream` runs
+// it; NORTHSTAR_E2E_LIVE=1 adds a test against real public resolvers.
 package upstream
 
 import (

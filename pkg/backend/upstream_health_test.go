@@ -387,3 +387,43 @@ func TestNewUpstream_InvalidAddressIsDroppedAndNotLogged(t *testing.T) {
 	assert.Equal(t, 2, logs.count("upstream nameserver is not host:port, ignored"))
 	assert.Zero(t, logs.count("s3cret"))
 }
+
+// Two queries hold the two forwarders: the second gets no trial, as that
+// would leave nothing open, so a third query still reaches a forwarder.
+func TestExchange_OneForwarderStaysOpenDuringTrials(t *testing.T) {
+	releaseA, releaseB := make(chan struct{}), make(chan struct{})
+	a := startFake(t, hold(releaseA))
+	b := startFake(t, hold(releaseB))
+	u, clk := newUpstream(t, a, b)
+	now := clk.now()
+	backend.SetHealth(u, a.addr, 1, now.Add(-time.Second))
+	backend.SetHealth(u, b.addr, 1, now.Add(-time.Second))
+
+	done := make(chan error, 3)
+	lookup := func() {
+		_, err := ask(t, u, "held.example.")
+		done <- err
+	}
+	go lookup()
+	<-a.received
+	go lookup()
+	<-b.received
+	go lookup()
+	select {
+	case <-b.received:
+	case err := <-done:
+		t.Fatalf("a lookup ended without reaching a forwarder: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("the third lookup reached no forwarder")
+	}
+	close(releaseA)
+	close(releaseB)
+	for range 3 {
+		require.NoError(t, <-done)
+	}
+}
+
+func TestNewUpstream_ScopedIPv6AndNamesAreKept(t *testing.T) {
+	u := backend.NewUpstream(backend.ParseUpstreamServers([]string{"[fe80::1%eth0]:53", "tls://dns.example.net:853", "[2001:db8::1]:53"}))
+	assert.Equal(t, []string{"[fe80::1%eth0]:53", "tls://dns.example.net:853", "[2001:db8::1]:53"}, u.Addresses())
+}

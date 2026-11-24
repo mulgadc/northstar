@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/netip"
 	"slices"
 	"strconv"
 	"strings"
@@ -62,7 +63,6 @@ const (
 	attemptBudget  = 1500 * time.Millisecond
 	cooldown       = 10 * time.Second
 	maxForwarders  = 3
-	resolveAttempt = 5 * time.Second // Resolve keeps its per-server reply wait
 	upstreamUDPBuf = 1232            // DNS flag-day 2020 EDNS0 payload, as unbound/dnsmasq use
 )
 
@@ -89,7 +89,7 @@ func validServers(servers []UpstreamServer) []UpstreamServer {
 	valid := make([]UpstreamServer, 0, len(servers))
 	for i, s := range servers {
 		host, port, err := net.SplitHostPort(s.Address)
-		if err != nil || host == "" || strings.ContainsFunc(host, invalidHostRune) {
+		if err != nil || !validHost(host) {
 			slog.Warn("upstream nameserver is not host:port, ignored", "index", i)
 			continue
 		}
@@ -102,12 +102,18 @@ func validServers(servers []UpstreamServer) []UpstreamServer {
 	return valid
 }
 
-func invalidHostRune(r rune) bool {
-	switch {
-	case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '-', r == ':':
-		return false
+// validHost accepts an IP address, including a scoped IPv6 one, or a DNS name.
+func validHost(host string) bool {
+	if _, err := netip.ParseAddr(host); err == nil {
+		return true
 	}
-	return true
+	return host != "" && !strings.ContainsFunc(host, func(r rune) bool {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '-':
+			return false
+		}
+		return true
+	})
 }
 
 func addresses(servers []UpstreamServer) []string {
@@ -203,6 +209,32 @@ func exchangeConn(ctx context.Context, c *dns.Client, addr string, m *dns.Msg) (
 	return in, err
 }
 
+type exchangeFunc func(ctx context.Context, server UpstreamServer, m *dns.Msg) (*dns.Msg, error)
+
+// resolveExchange is Resolve's transport: a 2 s dial and 5 s read per server,
+// and the truncated UDP reply when the TCP retry fails.
+func resolveExchange(_ context.Context, server UpstreamServer, m *dns.Msg) (*dns.Msg, error) {
+	client := func(network string) *dns.Client {
+		return &dns.Client{Net: network, DialTimeout: 2 * time.Second, ReadTimeout: 5 * time.Second, WriteTimeout: 2 * time.Second}
+	}
+	if server.UseTLS {
+		c := client("tcp-tls")
+		c.TLSConfig = &tls.Config{ServerName: serverNameFromAddr(server.Address)}
+		in, _, err := c.Exchange(m, server.Address)
+		return in, err
+	}
+	in, _, err := client("udp").Exchange(m, server.Address)
+	if err != nil {
+		return nil, err
+	}
+	if in != nil && in.Truncated {
+		if tin, _, terr := client("tcp").Exchange(m, server.Address); terr == nil && tin != nil {
+			return tin, nil
+		}
+	}
+	return in, nil
+}
+
 // withUpstreamEDNS sets/raises the outgoing EDNS0 UDP buffer to our advertised
 // size so upstream returns full answers regardless of what the client asked for.
 func withUpstreamEDNS(m *dns.Msg) {
@@ -213,16 +245,15 @@ func withUpstreamEDNS(m *dns.Msg) {
 	m.SetEdns0(upstreamUDPBuf, false)
 }
 
-// exchangeAndRecord runs exchangeServer for one upstream server wrapped in a
-// child span and the upstream forwards/duration metrics. spanName
-// distinguishes the full-query forwarder path (dns.upstream.exchange) from
-// the CNAME-chase resolver path (dns.upstream.resolve).
-func (u *Upstream) exchangeAndRecord(ctx context.Context, spanName string, server UpstreamServer, m *dns.Msg) (*dns.Msg, error) {
+// exchangeAndRecord runs one exchange in a child span (dns.upstream.exchange
+// for forwarded queries, dns.upstream.resolve for CNAME chasing) and records
+// the upstream forwards/duration metrics.
+func (u *Upstream) exchangeAndRecord(ctx context.Context, spanName string, exchange exchangeFunc, server UpstreamServer, m *dns.Msg) (*dns.Msg, error) {
 	ctx, span := u.inst.tracerOrGlobal().Start(ctx, spanName, trace.WithAttributes(attribute.String("server", server.Address)))
 	defer span.End()
 
 	start := time.Now()
-	in, err := exchangeServer(ctx, server, m)
+	in, err := exchange(ctx, server, m)
 	elapsed := time.Since(start)
 
 	outcome := "success"
@@ -287,17 +318,17 @@ func (u *Upstream) order() []*upstreamHealth {
 	return append(order, cooling...)
 }
 
-// claim is called just before contacting s. It reports false if another query
-// is retrying s, and claims the retry of a failed forwarder whose cooldown has
-// ended, so only one query at a time pays for one that is still dead. last is
-// true when none of the rest can be contacted, so s gets the whole budget.
+// claim runs just before contacting s: false if another query is retrying s.
+// It claims the retry of a forwarder out of cooldown unless all others are
+// under trial; last is true when none of rest can be contacted.
 func (u *Upstream) claim(s *upstreamHealth, rest []*upstreamHealth) (ok, trial, last bool) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	if s.trial {
 		return false, false, false
 	}
-	if s.fails > 0 && !u.now().Before(s.downUntil) && len(u.servers) > 1 {
+	others := slices.ContainsFunc(u.servers, func(o *upstreamHealth) bool { return o != s && !o.trial })
+	if s.fails > 0 && !u.now().Before(s.downUntil) && others {
 		s.trial = true
 		trial = true
 	}
@@ -351,10 +382,9 @@ func (u *Upstream) allFailedWarnDue() bool {
 	return true
 }
 
-// Exchange forwards a complete query to the forwarders, healthiest first, and
-// returns the first answer within queryBudget. If every forwarder refused it
-// returns REFUSED; otherwise an error, which the handler answers as SERVFAIL.
-// A caller that gives up does not count against the forwarder.
+// Exchange returns the first answer from the forwarders, healthiest first,
+// within queryBudget: REFUSED if every forwarder refused, else an error the
+// handler answers as SERVFAIL. A caller giving up is not a forwarder failure.
 func (u *Upstream) Exchange(ctx context.Context, r *dns.Msg) (*dns.Msg, error) {
 	if len(u.servers) == 0 {
 		return nil, errors.New("no upstream servers configured")
@@ -382,7 +412,7 @@ func (u *Upstream) Exchange(ctx context.Context, r *dns.Msg) (*dns.Msg, error) {
 			actx, acancel = context.WithTimeout(qctx, attemptBudget)
 		}
 		start := time.Now()
-		in, err := u.exchangeAndRecord(actx, "dns.upstream.exchange", s.UpstreamServer, m)
+		in, err := u.exchangeAndRecord(actx, "dns.upstream.exchange", exchangeServer, s.UpstreamServer, m)
 		timedOut := err != nil && actx.Err() != nil
 		acancel()
 		if ctx.Err() != nil {
@@ -430,9 +460,7 @@ func (u *Upstream) Resolve(ctx context.Context, name string, qtype uint16) ([]dn
 	var lastErr error
 
 	for _, server := range u.servers {
-		actx, cancel := context.WithTimeout(ctx, resolveAttempt)
-		in, err := u.exchangeAndRecord(actx, "dns.upstream.resolve", server.UpstreamServer, m)
-		cancel()
+		in, err := u.exchangeAndRecord(ctx, "dns.upstream.resolve", resolveExchange, server.UpstreamServer, m)
 		if err != nil {
 			slog.Debug("upstream failed", "server", server.Address, "error", err)
 			lastErr = err
