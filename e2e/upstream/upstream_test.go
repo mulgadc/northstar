@@ -288,6 +288,16 @@ func TestUpstream_AllUpstreamsDead_ServfailBeforeGuestTimeout(t *testing.T) {
 	require.Less(t, took, 4500*time.Millisecond)
 }
 
+// The last working upstream behind two silent ones still answers in time.
+func TestUpstream_LastUpstreamBehindTwoDeadStillResolves(t *testing.T) {
+	a, b := startBlackhole(t, "dead-a"), startBlackhole(t, "dead-b")
+	ok := startUpstream(t, "ok", answers)
+	n := startNorthstar(t, a.addr, b.addr, ok.addr)
+
+	guestLookup(t, n, "third.example.", 4*time.Second)
+	require.EqualValues(t, 1, ok.queries.Load())
+}
+
 // A slow but working sole upstream still answers: failover speed must not
 // exclude the only upstream there is.
 func TestUpstream_SlowSoleUpstreamStillAnswers(t *testing.T) {
