@@ -415,11 +415,19 @@ func (u *Upstream) Exchange(ctx context.Context, r *dns.Msg) (*dns.Msg, error) {
 	var refused *dns.Msg
 	var reasons []string
 	refusals := 0
-	for i, s := range order {
+	contacted, retaken := false, false
+	for i := 0; i < len(order); i++ {
+		s := order[i]
 		ok, trial, last := u.claim(s, order[i+1:])
 		if !ok {
+			// Every candidate was claimed by other lookups after the order
+			// was taken: take it once more rather than ask no forwarder.
+			if i == len(order)-1 && !contacted && !retaken {
+				order, i, retaken = u.order(), -1, true
+			}
 			continue
 		}
+		contacted = true
 		// The last forwarder gets all that is left of the query budget.
 		actx, acancel := qctx, context.CancelFunc(func() {})
 		if !last {
