@@ -119,6 +119,11 @@ e2e:
 		docker compose up -d --build --wait; \
 		GOWORK=off NORTHSTAR_E2E=1 go test -count=1 -v -timeout 120s ./...
 
+# Upstream failover against controlled fake resolvers: no docker, no network, about a minute.
+# NORTHSTAR_E2E_LIVE=1 adds a check against real dead, non-recursive and public resolvers.
+e2e-upstream:
+	cd e2e && GOWORK=off NORTHSTAR_E2E_UPSTREAM=1 go test -count=1 -v -timeout 180s ./upstream/
+
 e2e-down:
 	cd e2e && docker compose down -v
 
@@ -129,4 +134,4 @@ docker:
 	docker buildx build --push --platform linux/arm/v7,linux/arm64/v8,linux/amd64 --tag $(DOCKER_IMAGE):latest .
 
 .PHONY: build go_build run preflight test test-cover test-race diff-coverage bench prof clean \
-	lint fix govulncheck nilaway e2e e2e-down docker
+	lint fix govulncheck nilaway e2e e2e-upstream e2e-down docker

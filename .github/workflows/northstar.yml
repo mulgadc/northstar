@@ -43,6 +43,9 @@ jobs:
       - name: Run Tests with Coverage
         run: make test-cover
 
+      - name: Upstream DNS e2e
+        run: make e2e-upstream
+
       - name: Check Diff Coverage
         run: scripts/diff-coverage.sh coverage.out --base HEAD~1
 

@@ -37,6 +37,9 @@ type Server struct {
 // any listeners or read any zones until Start is called.
 func NewServer(cfg config.ServerConfig) (*Server, error) {
 	upstream := backend.NewUpstream(backend.ParseUpstreamServers(cfg.Upstream.Nameservers))
+	if upstream.HasServers() {
+		slog.Info("northstar upstream forwarders", "servers", upstream.Addresses())
+	}
 	allowed, err := cfg.Upstream.ParseAllowRecursionFrom()
 	if err != nil {
 		return nil, err
